@@ -532,7 +532,7 @@ function sortHand(hand, giruda, mighty){
   function localPlayerId(){return onlineEnabled()?online.playerId:0;}
   function isLocalHuman(pid){return pid===localPlayerId();}
   function escHtml(s){return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));}
-  function onlineUrl(){const proto=location.protocol==="https:"?"wss:":"ws:";return `${proto}//${location.host}/ws`;}
+  function onlineUrl(){return "wss://mighty-online-6svd.onrender.com/ws";}
   function onlineSend(o){if(onlineEnabled())online.ws.send(JSON.stringify(o));}
   function onlineDisconnect(){
     if(online.timerHandle)clearInterval(online.timerHandle); online.timerHandle=null;

@@ -395,7 +395,6 @@
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="newGameBtn" class="btn ghost" style="padding:6px 10px;font-size:11px;">새 게임</button>
-       <button id="onlineBtn" class="btn ghost" style="padding:6px 10px;font-size:11px;">온라인</button>
     </div>
   </div>
   <div id="statusStrip"></div>
@@ -1685,6 +1684,12 @@ function showRoundSetup(){
   const optHtml = presets.map(n=>`<div class="count-opt" data-n="${n}" style="width:44px;">${n}판</div>`).join("");
   openModal(`
     <h2>마이티 시작</h2>
+    <p class="sub" style="text-align:center;">게임 방식을 선택하세요.</p>
+    <div class="modal-actions" style="display:flex;gap:10px;">
+      <button class="btn" id="createOnlineRoomBtn" style="flex:1;">방만들기</button>
+      <button class="btn ghost" id="soloStartBtn" style="flex:1;">혼자시작</button>
+    </div>
+    <div id="soloSetupArea" style="display:none;">
     <p class="sub">시작 점수 (보통 50점)</p>
     <div class="row"><input type="number" id="startScoreInput" value="50" min="0" max="999" style="flex:1;padding:9px 10px;border-radius:8px;border:1px solid var(--line);background:#0000002a;color:var(--paper);font-size:14px;"></div>
 
@@ -1703,7 +1708,18 @@ function showRoundSetup(){
     <p class="sub" id="bustHint" style="display:none;">한 명이라도 점수가 0점 이하가 되면 그 판을 마지막으로 매치가 종료됩니다.</p>
 
     <div class="modal-actions"><button class="btn" id="startMatchBtn">게임 시작</button></div>
+    </div>
   `);
+  document.getElementById("createOnlineRoomBtn").onclick = ()=>{
+    closeModal();
+    showOnlineEntry();
+  };
+  document.getElementById("soloStartBtn").onclick = ()=>{
+    document.getElementById("soloSetupArea").style.display = "block";
+    document.getElementById("soloStartBtn").style.display = "none";
+    document.getElementById("createOnlineRoomBtn").style.display = "none";
+  };
+
   let chosenRounds = 1;
   let chosenMode = "rounds";
   document.querySelectorAll("#roundRow .count-opt").forEach(el=>{
@@ -1841,7 +1857,6 @@ function resumeGame(){
 (async function init(){
   document.getElementById("log").addEventListener("click", openLogModal);
   document.getElementById("newGameBtn").addEventListener("click", confirmNewGame);
-  document.getElementById("onlineBtn").addEventListener("click", showOnlineEntry);
 
   // 강제 종료/백그라운드 전환 등 언제 끊겨도 최신 상태가 저장되도록 즉시 플러시
   document.addEventListener("visibilitychange", ()=>{ if(document.hidden) flushSaveNow(); });

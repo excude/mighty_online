@@ -576,6 +576,13 @@ function sortHand(hand, giruda, mighty){
     else if(action.type==="friend"&&G.phase==="friend"&&G.declarer===pid)applyFriend(action.choice,true);
     broadcastOnlineState();
   }
+  function closeOnlineModal(){
+    const onlineModal = document.getElementById("onlineModal");
+    const overlay = document.getElementById("modalOverlay");
+    
+    if(onlineModal) onlineModal.classList.remove("show");
+    if(overlay) overlay.classList.remove("show");
+  }
   function connectOnline(nickname,roomCode){
     onlineDisconnect();online.nickname=nickname;localStorage.setItem("mighty_online_nickname",nickname);
     const ws=new WebSocket(onlineUrl());online.ws=ws;
@@ -592,20 +599,22 @@ function sortHand(hand, giruda, mighty){
         renderOnlineLobby();
       }
       else if(m.type==="action"&&online.host)handleOnlineAction(m.action,m.playerId);
-      else if(m.type==="state"){
+      else if(m.type === "state"){
         if(m.state?.G){
           G = deserializeG(m.state.G);
-          Object.assign(matchState, m.state.matchState||{});
+          Object.assign(matchState, m.state.matchState || {});
           online.deadline = m.state.deadline || online.deadline;
           
-          // 💡 추가: 수신받은 G의 페이즈에 맞춰 화면 및 UI 흐름 재개
+          // 💡 1. 게임 시작 상태를 받으면 플레이어 화면의 대기실 모달/팝업을 닫습니다.
+          closeOnlineModal(); // 대기실 창을 닫는 함수 호출 (또는 아래 DOM 제어 직접 적용)
+          // document.getElementById("onlineModal")?.classList.remove("show");
+          // document.getElementById("modalOverlay")?.classList.remove("show");
+      
+          // 💡 2. 게임 화면 렌더링 및 페이즈 재개
           render();
-          if(G.phase === "bidding") {
-            // 모달이 닫혀있는 경우 배팅 UI 렌더링
-            if(!document.getElementById("modalOverlay").classList.contains("show")) {
-              scheduleBidStep();
-            }
-          } else if(G.phase === "play") {
+          if(G.phase === "bidding"){
+            scheduleBidStep();
+          } else if(G.phase === "play"){
             scheduleTurn();
           }
         }

@@ -396,11 +396,9 @@
       <div id="phaseTag">준비 중</div>
       <button id="newGameBtn" class="btn ghost" style="padding:6px 10px;font-size:11px;">새 게임</button>
        <button id="onlineBtn" class="btn ghost" style="padding:6px 10px;font-size:11px;">온라인</button>
-       <button id="onlineBtn" class="btn ghost" style="padding:6px 10px;font-size:11px;">온라인</button>
     </div>
   </div>
   <div id="statusStrip"></div>
-   <div id="onlineTimer" class="online-timer" style="display:none;"></div>
    <div id="onlineTimer" class="online-timer" style="display:none;"></div>
 
   <div id="table">
@@ -532,7 +530,7 @@ function sortHand(hand, giruda, mighty){
   function localPlayerId(){return onlineEnabled()?online.playerId:0;}
   function isLocalHuman(pid){return pid===localPlayerId();}
   function escHtml(s){return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m]));}
-  function onlineUrl(){return "wss://mighty-online-6svd.onrender.com/ws";}
+  function onlineUrl(){const proto=location.protocol==="https:"?"wss:":"ws:";return `${proto}//${location.host}/ws`;}
   function onlineSend(o){if(onlineEnabled())online.ws.send(JSON.stringify(o));}
   function onlineDisconnect(){
     if(online.timerHandle)clearInterval(online.timerHandle); online.timerHandle=null;
@@ -598,7 +596,7 @@ function sortHand(hand, giruda, mighty){
   function renderOnlineLobby(){
     if(!online.connected)return;
     const rows=online.players.map(p=>`<div class="online-player-row"><span class="dot"></span><span>${escHtml(p.name)}</span><span style="margin-left:auto;opacity:.55">${p.host?"방장":"플레이어"}</span></div>`).join("");
-    openModal(`<h2>온라인 방</h2><p class="sub">친구에게 아래 방 코드를 알려주세요.</p><div class="room-code">${escHtml(online.room)}</div>${rows}<p class="online-hint">최대 5명. 사람이 적으면 빈 자리는 AI로 자동 보충됩니다.</p><div class="modal-actions"><button class="btn" id="onlineStartBtn" ${online.host?"":"style=\"display:none\""}>게임 시작</button><button class="btn ghost" id="onlineLeaveBtn">나가기</button></div>`);
+    openModal(`<h2>온라인 방</h2><p class="sub">친구에게 아래 방 코드를 알려주세요.</p><div class="room-code">${escHtml(online.room)}</div>${rows}<p class="online-hint">최대 5명 · 현재 인원으로 바로 시작할 수 있습니다. 사람이 적으면 빈 자리는 AI로 자동 보충됩니다.</p><div class="modal-actions"><button class="btn" id="onlineStartBtn" ${online.host?"":"style=\"display:none\""}>게임 시작</button><button class="btn ghost" id="onlineLeaveBtn">나가기</button></div>`);
     document.getElementById("onlineLeaveBtn").onclick=()=>{closeModal();onlineDisconnect();};
     if(online.host)document.getElementById("onlineStartBtn").onclick=()=>{closeModal();startOnlineGame();};
   }

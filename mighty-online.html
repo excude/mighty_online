@@ -584,7 +584,13 @@ function sortHand(hand, giruda, mighty){
     ws.onopen=()=>ws.send(JSON.stringify({type:"join",nickname,room:(roomCode||"").toUpperCase()}));
     ws.onmessage=(ev)=>{let m;try{m=JSON.parse(ev.data)}catch(e){return}
       if(m.type==="welcome"){online.connected=true;online.playerId=m.playerId;online.host=!!m.host;online.room=m.room;online.players=m.players||[];localStorage.setItem("mighty_online_room",online.room);renderOnlineLobby();}
-      else if(m.type==="lobby"){online.players=m.players||[];online.host=!!m.host;renderOnlineLobby();}
+      else if(m.type==="lobby"){
+        online.players=m.players||[];
+        // 💡 수정: 내 아이디를 기준으로 방장 여부를 안전하게 다시 한 번 확인합니다.
+        const me = online.players.find(p => p.id === online.playerId);
+        online.host = (me && me.host) ? true : !!m.host;
+        renderOnlineLobby();
+      }
       else if(m.type==="action"&&online.host)handleOnlineAction(m.action,m.playerId);
       else if(m.type==="state"){if(m.state?.G){G=deserializeG(m.state.G);Object.assign(matchState,m.state.matchState||{});online.deadline=m.state.deadline||online.deadline;render();}}
       else if(m.type==="timer"){online.deadline=m.deadline||0;onlineRenderTimer();}
@@ -594,6 +600,11 @@ function sortHand(hand, giruda, mighty){
   }
   function renderOnlineLobby(){
     if(!online.connected)return;
+    
+    // 💡 수정: 모달을 그리기 전에 방장 권한을 한 번 더 동기화합니다.
+    const isHost = online.players.some(p => p.id === online.playerId && p.host) || online.host;
+    online.host = isHost;
+  
     const rows=online.players.map(p=>`<div class="online-player-row"><span class="dot"></span><span>${escHtml(p.name)}</span><span style="margin-left:auto;opacity:.55">${p.host?"방장":"플레이어"}</span></div>`).join("");
     openModal(`<h2>온라인 방</h2><p class="sub">친구에게 아래 방 코드를 알려주세요.</p><div class="room-code">${escHtml(online.room)}</div>${rows}<p class="online-hint">최대 5명 · 현재 인원으로 바로 시작할 수 있습니다. 사람이 적으면 빈 자리는 AI로 자동 보충됩니다.</p><div class="modal-actions"><button class="btn" id="onlineStartBtn" ${online.host?"":"style=\"display:none\""} ${online.host?"":"disabled"}>게임 시작</button><button class="btn ghost" id="onlineLeaveBtn">나가기</button></div>`);
     document.getElementById("onlineLeaveBtn").onclick=()=>{closeModal();onlineDisconnect();};

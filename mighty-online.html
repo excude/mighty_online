@@ -595,9 +595,14 @@ function sortHand(hand, giruda, mighty){
   function renderOnlineLobby(){
     if(!online.connected)return;
     const rows=online.players.map(p=>`<div class="online-player-row"><span class="dot"></span><span>${escHtml(p.name)}</span><span style="margin-left:auto;opacity:.55">${p.host?"방장":"플레이어"}</span></div>`).join("");
-    openModal(`<h2>온라인 방</h2><p class="sub">친구에게 아래 방 코드를 알려주세요.</p><div class="room-code">${escHtml(online.room)}</div>${rows}<p class="online-hint">최대 5명 · 현재 인원으로 바로 시작할 수 있습니다. 사람이 적으면 빈 자리는 AI로 자동 보충됩니다.</p><div class="modal-actions"><button class="btn" id="onlineStartBtn" ${online.host?"":"style=\"display:none\""}>게임 시작</button><button class="btn ghost" id="onlineLeaveBtn">나가기</button></div>`);
+    openModal(`<h2>온라인 방</h2><p class="sub">친구에게 아래 방 코드를 알려주세요.</p><div class="room-code">${escHtml(online.room)}</div>${rows}<p class="online-hint">최대 5명 · 현재 인원으로 바로 시작할 수 있습니다. 사람이 적으면 빈 자리는 AI로 자동 보충됩니다.</p><div class="modal-actions"><button class="btn" id="onlineStartBtn" ${online.host?"":"style=\"display:none\""} ${online.host?"":"disabled"}>게임 시작</button><button class="btn ghost" id="onlineLeaveBtn">나가기</button></div>`);
     document.getElementById("onlineLeaveBtn").onclick=()=>{closeModal();onlineDisconnect();};
-    if(online.host)document.getElementById("onlineStartBtn").onclick=()=>{closeModal();startOnlineGame();};
+    const onlineStartBtn=document.getElementById("onlineStartBtn");
+    if(onlineStartBtn && online.host){
+      onlineStartBtn.style.display="";
+      onlineStartBtn.disabled=false;
+      onlineStartBtn.onclick=()=>{closeModal();startOnlineGame();};
+    }
   }
   function showOnlineEntry(){
     const saved=localStorage.getItem("mighty_online_nickname")||"";
@@ -1686,7 +1691,7 @@ function showRoundSetup(){
     <h2>마이티 시작</h2>
     <p class="sub" style="text-align:center;">게임 방식을 선택하세요.</p>
     <div class="modal-actions" style="display:flex;gap:10px;">
-      <button class="btn" id="createOnlineRoomBtn" style="flex:1;">방만들기</button>
+      <button class="btn" id="createOnlineRoomBtn" style="flex:1;">온라인게임</button>
       <button class="btn ghost" id="soloStartBtn" style="flex:1;">혼자시작</button>
     </div>
     <div id="soloSetupArea" style="display:none;">

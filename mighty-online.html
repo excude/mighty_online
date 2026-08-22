@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.201 -->
+<!-- MIGHTY (마이티) - v0.20 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -418,7 +418,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div class="brand title-font">마이티<span class="ver-tag">v0.201</span><span>MIGHTY CARD GAME</span></div>
+    <div class="brand title-font">마이티<span class="ver-tag">v0.20</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -676,11 +676,14 @@ function seatSlot(absId){ return (absId - meId() + 5) % 5; } // 화면상 내 �
 function escHtml(s){ return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[m])); }
 
 function onlineUrl(){
+  let url = ONLINE_SERVER_URL;
   try{
     const saved = localStorage.getItem("mighty_online_server");
-    if(saved) return saved;
+    if(saved) url = saved;
   }catch(e){}
-  return ONLINE_SERVER_URL;
+  url = url.trim().replace(/\/+$/,""); // 끝의 슬래시 제거
+  if(!/\/ws$/.test(url)) url += "/ws"; // 서버는 /ws 경로에서만 웹소켓을 받으므로 자동으로 붙여준다
+  return url;
 }
 function onlineSend(o){ if(onlineEnabled()) online.ws.send(JSON.stringify(o)); }
 function onlineDisconnect(silent){
@@ -744,15 +747,25 @@ function connectOnline(nickname, roomCode){
   onlineDisconnect(true);
   online.nickname = nickname;
   try{ localStorage.setItem("mighty_online_nickname", nickname); }catch(e){}
+  const url = onlineUrl();
   let ws;
-  try{ ws = new WebSocket(onlineUrl()); }catch(e){ alert("온라인 서버 주소가 올바르지 않습니다."); return; }
+  try{ ws = new WebSocket(url); }catch(e){ alert("온라인 서버 주소가 올바르지 않습니다: "+url); return; }
   online.ws = ws;
   if(online.uiTimerHandle) clearInterval(online.uiTimerHandle);
   online.uiTimerHandle = setInterval(onlineRenderTimer, 250);
+  openModal(`<h2>연결 중…</h2><p class="sub">${escHtml(url)} 에 접속하고 있습니다.</p>`);
+  const connectTimeout = setTimeout(()=>{
+    if(!online.connected){
+      alert("서버에 연결하지 못했습니다.\n주소: "+url+"\n\n· 주소가 wss:// 로 시작하는지\n· Render 서비스가 배포/실행 중인지(무료 플랜은 첫 접속 시 수십 초 걸릴 수 있음)\n· server.js가 \"/ws\" 경로로 웹소켓을 열고 있는지\n확인해주세요.");
+      onlineDisconnect();
+      showRoundSetup();
+    }
+  }, 8000);
   ws.onopen = ()=> ws.send(JSON.stringify({type:"join", nickname, room:(roomCode||"").toUpperCase()}));
   ws.onmessage = (ev)=>{
     let m; try{ m = JSON.parse(ev.data); }catch(e){ return; }
     if(m.type==="welcome"){
+      clearTimeout(connectTimeout);
       online.connected=true; online.playerId=m.playerId; online.host=!!m.host; online.room=m.room; online.players=m.players||[];
       try{ localStorage.setItem("mighty_online_room", online.room); }catch(e){}
       renderOnlineLobby();
@@ -784,12 +797,13 @@ function connectOnline(nickname, roomCode){
     }
   };
   ws.onclose = ()=>{
+    clearTimeout(connectTimeout);
     const was = online.connected;
     online.connected=false; online.ws=null;
     const el = document.getElementById("onlineTimer"); if(el) el.style.display="none";
     if(was) alert("온라인 방 연결이 종료되었습니다.");
   };
-  ws.onerror = ()=>{};
+  ws.onerror = (e)=>{ console.error("온라인 서버 연결 오류", url, e); };
 }
 function logMsgSafe(s){ if(G && typeof logMsg==="function") logMsg(s); }
 function closeOnlineModals(){

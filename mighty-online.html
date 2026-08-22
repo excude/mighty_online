@@ -441,7 +441,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div class="brand title-font">마이티<span class="ver-tag">v0.204</span><span>MIGHTY CARD GAME</span></div>
+    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.204</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -2572,6 +2572,39 @@ function confirmNewGame(){
     showRoundSetup();
   };
 }
+
+/* ============================ 디버그 사이트 이동 (로고 5연속 터치) ============================ */
+function confirmDebugSite(){
+  openModal(`
+    <h2>디버그 모드</h2>
+    <p class="sub" style="text-align:center;">디버그 사이트로 이동하시겠습니까?</p>
+    <div class="modal-actions">
+      <button class="btn ghost" id="cancelDebugSiteBtn">아니오</button>
+      <button class="btn" id="confirmDebugSiteBtn">예</button>
+    </div>
+  `);
+  document.getElementById("cancelDebugSiteBtn").onclick = closeModal;
+  document.getElementById("confirmDebugSiteBtn").onclick = ()=>{
+    closeModal();
+    location.href = "mighty_online_debug.html";
+  };
+}
+(function setupLogoDebugTap(){
+  const logoEl = document.getElementById("logoBrand");
+  if(!logoEl) return;
+  let tapCount = 0;
+  let tapTimer = null;
+  logoEl.addEventListener("click", ()=>{
+    tapCount++;
+    if(tapTimer) clearTimeout(tapTimer);
+    tapTimer = setTimeout(()=>{ tapCount = 0; }, 1500);
+    if(tapCount >= 5){
+      tapCount = 0;
+      clearTimeout(tapTimer);
+      confirmDebugSite();
+    }
+  });
+})();
 
 /* ============================ 저장/불러오기 (window.storage) ============================ */
 function serializeG(g){

@@ -414,6 +414,28 @@
   .room-code{font-family:'Black Han Sans';font-size:27px;letter-spacing:5px;text-align:center;color:var(--gold-bright);padding:9px;border:1px dashed var(--gold);border-radius:10px;margin:10px 0;}
   .online-hint{font-size:11px;color:#c8d8ceaa;line-height:1.55;}
   .online-status-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#6fe3a0;margin-right:4px;box-shadow:0 0 5px #6fe3a0;}
+
+  /* ---------- TOAST (접속 끊김 등 알림) ---------- */
+  #toastStack{
+    position:absolute;top:56px;left:50%;transform:translateX(-50%);
+    z-index:60;display:flex;flex-direction:column;gap:6px;align-items:center;
+    pointer-events:none;width:calc(100% - 24px);max-width:480px;
+  }
+  .toast{
+    pointer-events:auto;
+    display:flex;align-items:center;gap:8px;
+    padding:9px 14px;border-radius:10px;
+    font-size:12.5px;line-height:1.4;color:var(--paper);
+    background:#2a1414e6;border:1px solid #ef7d7d88;
+    box-shadow:0 4px 14px #00000060;
+    animation:toastIn .25s ease-out;
+    max-width:100%;
+  }
+  .toast.info{background:#0e2a20e6;border-color:#d4af6a66;}
+  @keyframes toastIn{ from{opacity:0;transform:translateY(-6px);} to{opacity:1;transform:translateY(0);} }
+  .toast.hide{ animation:toastOut .2s ease-in forwards; }
+  @keyframes toastOut{ from{opacity:1;} to{opacity:0;transform:translateY(-6px);} }
+
 </style>
 </head>
 <body>
@@ -428,6 +450,7 @@
   </div>
   <div id="statusStrip"></div>
   <div id="onlineTimer" class="online-timer" style="display:none;"></div>
+  <div id="toastStack"></div>
 
   <div id="table">
     <div id="trickArea"></div>
@@ -826,7 +849,9 @@ function connectOnline(nickname, roomCode){
     } else if(m.type==="timer"){
       online.deadline = m.deadline||0; onlineRenderTimer();
     } else if(m.type==="peer_left"){
-      logMsgSafe(`⚠️ ${escHtml(m.name||"플레이어")}님이 방을 나갔습니다. 해당 자리는 AI가 대신합니다.`);
+      const nm = m.name||"플레이어";
+      logMsgSafe(`⚠️ ${escHtml(nm)}님이 방을 나갔습니다. 해당 자리는 AI가 대신합니다.`);
+      showToast(`⚠️ ${nm}님의 접속이 끊겼습니다. 해당 자리는 AI가 대신 진행합니다.`);
     } else if(m.type==="error"){
       alert(m.message||"온라인 오류가 발생했습니다."); onlineDisconnect();
     }
@@ -841,6 +866,19 @@ function connectOnline(nickname, roomCode){
   ws.onerror = (e)=>{ console.error("온라인 서버 연결 오류", url, e); };
 }
 function logMsgSafe(s){ if(G && typeof logMsg==="function") logMsg(s); }
+// 화면 상단에 잠깐 뜨는 알림 배너 (접속 끊김 등). alert()과 달리 게임 흐름을 막지 않는다.
+function showToast(msg, kind="warn"){
+  const stack = document.getElementById("toastStack");
+  if(!stack) return;
+  const el = document.createElement("div");
+  el.className = `toast ${kind==="info"?"info":""}`;
+  el.textContent = msg;
+  stack.appendChild(el);
+  setTimeout(()=>{
+    el.classList.add("hide");
+    setTimeout(()=>el.remove(), 220);
+  }, 3800);
+}
 // 게스트 화면에서 "내 차례"로 바뀐 단계(배팅/카드교환/프렌드 지목)의 팝업을 직접 띄워준다.
 // host는 scheduleBidStep()/scheduleTurn() 등에서 renderXXXUI()를 직접 호출하지만,
 // 게스트는 그런 스케줄 함수를 실행하지 않고 host의 state 브로드캐스트만 받으므로 여기서 대신 처리한다.
@@ -902,9 +940,13 @@ function showOnlineEntry(){
 }
 function buildRoster(){
   if(onlineEnabled()){
+    const takenNames = new Set(online.players.map(p=>p.name));
+    const aiNamePool = NAMES.slice(1).filter(n=>!takenNames.has(n));
+    let aiIdx = 0;
+    const nextAiName = ()=> aiNamePool[aiIdx++ % aiNamePool.length] || `AI`;
     return Array.from({length:5},(_,i)=>{
       const q = online.players.find(p=>p.id===i);
-      return q ? {name:q.name, isHuman:true} : {name:`AI ${i+1}`, isHuman:false};
+      return q ? {name:q.name, isHuman:true} : {name:nextAiName(), isHuman:false};
     });
   }
   return NAMES.map((n,i)=>({name:n, isHuman:i===0}));

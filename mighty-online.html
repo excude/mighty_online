@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.20 -->
+<!-- MIGHTY (마이티) - v0.21 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -418,7 +418,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div class="brand title-font">마이티<span class="ver-tag">v0.20</span><span>MIGHTY CARD GAME</span></div>
+    <div class="brand title-font">마이티<span class="ver-tag">v0.21</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -777,6 +777,8 @@ function connectOnline(nickname, roomCode){
     } else if(m.type==="action" && online.host){
       handleOnlineAction(m.action, m.playerId);
     } else if(m.type==="state"){
+      if(online.host) return; // host는 자기 자신이 방금 보낸 broadcast를 서버가 되돌려주더라도 다시 처리하지 않는다.
+                               // (그렇지 않으면 render()→broadcast→자기 자신 수신→render()→broadcast… 로 무한 루프가 돌면서 화면이 계속 깜박인다)
       if(m.state && m.state.G){
         const wasNoGame = !G;
         G = deserializeG(m.state.G);

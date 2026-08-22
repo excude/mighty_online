@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.201 -->
+<!-- MIGHTY (마이티) - v0.204 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -441,10 +441,11 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div class="brand title-font">마이티<span class="ver-tag">v0.201</span><span>MIGHTY CARD GAME</span></div>
+    <div class="brand title-font">마이티<span class="ver-tag">v0.204</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
+      <button id="profileBackupBtn" class="btn ghost" style="padding:6px 10px;font-size:13px;">💾</button>
       <button id="newGameBtn" class="btn ghost" style="padding:6px 10px;font-size:11px;">새 게임</button>
     </div>
   </div>
@@ -984,6 +985,67 @@ async function loadProfile(){
 }
 async function saveProfile(){
   try{ await window.storage.set("mighty_profile", JSON.stringify(profile), false); }catch(e){ /* 무시 */ }
+}
+/* ============================ 프로필 백업 코드 (복사/붙여넣기로 사이트 이전) ============================ */
+function encodeProfileCode(){
+  const payload = { type:"mighty_profile_backup", v:1, profile, savedAt:Date.now() };
+  return "MIGHTY1:" + btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+}
+function decodeProfileCode(code){
+  const trimmed = (code||"").trim();
+  const body = trimmed.startsWith("MIGHTY1:") ? trimmed.slice(8) : trimmed;
+  const payload = JSON.parse(decodeURIComponent(escape(atob(body))));
+  if(!payload || payload.type!=="mighty_profile_backup" || !payload.profile) throw new Error("invalid");
+  return payload.profile;
+}
+function showProfileBackupUI(){
+  const code = encodeProfileCode();
+  openModal(`
+    <h2>내 전적 백업</h2>
+    <p class="sub" style="text-align:center;">누적 ${profile.totalWins}승 / ${profile.totalGames}판 · Lv.${profile.level} · ${Math.round(profile.xp)}xp · 최고 연승 ${profile.bestStreak}회</p>
+    <p class="sub">아래 코드를 복사해두면, 사이트가 바뀌거나 데이터가 초기화됐을 때 "붙여넣기로 복원"에 붙여넣어 전적을 되살릴 수 있어요.</p>
+    <textarea id="profileCodeBox" readonly style="width:100%;min-height:90px;padding:8px;border-radius:8px;border:1px solid var(--line);background:#0000002a;color:var(--paper);font-size:11px;font-family:monospace;resize:vertical;">${code}</textarea>
+    <div class="modal-actions">
+      <button class="btn ghost" id="closeProfileBackupBtn">닫기</button>
+      <button class="btn" id="copyProfileCodeBtn">코드 복사</button>
+    </div>
+    <p class="sub" style="margin-top:14px;">다른 곳에서 복사해온 코드가 있다면:</p>
+    <div class="row"><input type="text" id="restoreCodeInput" placeholder="여기에 코드를 붙여넣으세요" style="flex:1;padding:9px 10px;border-radius:8px;border:1px solid var(--line);background:#0000002a;color:var(--paper);font-size:12px;"></div>
+    <div class="modal-actions"><button class="btn" id="restoreProfileBtn">붙여넣기로 복원</button></div>
+    <p class="sub" id="profileBackupMsg" style="text-align:center;min-height:16px;"></p>
+  `);
+  const msgEl = document.getElementById("profileBackupMsg");
+  document.getElementById("closeProfileBackupBtn").onclick = closeModal;
+  document.getElementById("copyProfileCodeBtn").onclick = async ()=>{
+    const box = document.getElementById("profileCodeBox");
+    try{
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        await navigator.clipboard.writeText(box.value);
+      } else {
+        box.select(); document.execCommand("copy");
+      }
+      msgEl.textContent = "✅ 복사되었습니다.";
+      msgEl.style.color = "var(--gold-bright)";
+    }catch(e){
+      box.select();
+      try{ document.execCommand("copy"); msgEl.textContent = "✅ 복사되었습니다."; msgEl.style.color="var(--gold-bright)"; }
+      catch(e2){ msgEl.textContent = "복사에 실패했어요. 코드를 직접 선택해 복사해주세요."; msgEl.style.color="#ef7d7d"; }
+    }
+  };
+  document.getElementById("restoreProfileBtn").onclick = async ()=>{
+    const input = document.getElementById("restoreCodeInput").value;
+    try{
+      const restored = decodeProfileCode(input);
+      Object.assign(profile, restored);
+      await saveProfile();
+      msgEl.textContent = "✅ 전적이 복원되었습니다.";
+      msgEl.style.color = "var(--gold-bright)";
+      if(G) renderTopbar();
+    }catch(e){
+      msgEl.textContent = "❌ 코드를 확인해주세요. 올바른 백업 코드가 아닙니다.";
+      msgEl.style.color = "#ef7d7d";
+    }
+  };
 }
 function xpToNextLevel(level){ return 100 + (level-1)*35; }
 function levelProgressPercent(level, xp){ return Math.max(0, Math.min(100, (xp/xpToNextLevel(level))*100)); }
@@ -2580,6 +2642,7 @@ function resumeGame(){
   document.getElementById("log").addEventListener("click", openLogModal);
   document.getElementById("newGameBtn").addEventListener("click", confirmNewGame);
   document.getElementById("sfxToggle").addEventListener("click", toggleSfx);
+  document.getElementById("profileBackupBtn").addEventListener("click", showProfileBackupUI);
   loadSfxPref();
   // iOS Safari 등에서는 사용자의 첫 터치가 있어야 오디오가 재생 가능해지므로, 화면 첫 터치에서 오디오 컨텍스트를 깨워둠
   document.body.addEventListener("touchstart", ()=>getSfxCtx(), {once:true, passive:true});

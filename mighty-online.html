@@ -28,7 +28,8 @@
       radial-gradient(ellipse at 50% 20%, var(--felt-2), var(--felt-1) 70%);
     color:var(--paper);
     overflow:hidden;
-    height:100vh;
+    height:calc(var(--vh, 1vh) * 100);
+    height:100dvh;
     width:100vw;
     position:fixed;
     inset:0;
@@ -452,6 +453,18 @@
 (function(){
 "use strict";
 
+// 모바일 브라우저(특히 iOS Safari)에서 100vh가 주소창까지 포함해 계산되어
+// 화면 하단(손패 등)이 실제로는 안 보이는 문제를 막기 위해, 실제 보이는 높이를
+// --vh 커스텀 속성으로 계산해둔다 (100dvh를 지원하는 브라우저는 CSS의 100dvh가 우선 적용됨).
+function setViewportHeightVar(){
+  const h = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
+  document.documentElement.style.setProperty("--vh", (h*0.01)+"px");
+}
+setViewportHeightVar();
+window.addEventListener("resize", setViewportHeightVar);
+window.addEventListener("orientationchange", setViewportHeightVar);
+if(window.visualViewport) window.visualViewport.addEventListener("resize", setViewportHeightVar);
+
 /* ============================ 로컬 저장소 (localStorage 기반, 로그인 불필요) ============================
    원래 Claude 아티팩트의 window.storage API(클라우드 저장, 로그인 필요)를
    브라우저의 localStorage를 사용하는 동일한 인터페이스로 대체합니다.
@@ -706,7 +719,17 @@ function onlineArmTimer(pid, phase){
     if(G.phase==="bidding" && G.bidTurn===pid) humanBid("pass", pid, true);
     else if(G.phase==="play" && ((G.leader+G.trick.length)%5)===pid && G.trick.length<5){
       const mv = validMoves(pid);
-      if(mv.length) playCard(pid, aiChooseCard(pid, mv), true);
+      if(mv.length){
+        const wasLead = G.trick.length===0;
+        const card = aiChooseCard(pid, mv);
+        playCard(pid, card, true);
+        if(wasLead && card===JOKER && G.trickNum>1 && G.trickNum<10){
+          const suit = aiChooseJokerCallSuit(pid);
+          G.ledSuit = suit;
+          logMsg(`🃏 ${G.players[pid].name}의 조커 선언: 이번 트릭은 ${SUIT_NAME[suit]} 기준으로 진행됩니다.`);
+        }
+        scheduleTurn();
+      }
     } else if(G.phase==="exchange" && G.declarer===pid){
       const d = G.players[pid];
       const scored = d.hand.map(c=>({c,v:cardWeight(c)})).sort((a,b)=>a.v-b.v);
@@ -739,7 +762,17 @@ function broadcastOnlineState(){
 function handleOnlineAction(action, pid){
   if(!G || !action) return;
   if(action.type==="bid" && G.phase==="bidding" && G.bidTurn===pid) humanBid(action.bid, pid, true);
-  else if(action.type==="play" && G.phase==="play" && ((G.leader+G.trick.length)%5)===pid) playCard(pid, action.card, true);
+  else if(action.type==="play" && G.phase==="play" && ((G.leader+G.trick.length)%5)===pid){
+    const wasLead = G.trick.length===0;
+    const card = action.card;
+    playCard(pid, card, true);
+    if(wasLead && card===JOKER && G.trickNum>1 && G.trickNum<10){
+      const suit = aiChooseJokerCallSuit(pid);
+      G.ledSuit = suit;
+      logMsg(`🃏 ${G.players[pid].name}의 조커 선언: 이번 트릭은 ${SUIT_NAME[suit]} 기준으로 진행됩니다.`);
+    }
+    scheduleTurn();
+  }
   else if(action.type==="exchange" && G.phase==="exchange" && G.declarer===pid) doExchange(action.cards, true);
   else if(action.type==="friend" && G.phase==="friend" && G.declarer===pid) applyFriend(action.choice, true);
 }

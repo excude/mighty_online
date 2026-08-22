@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.20 -->
+<!-- MIGHTY (마이티) - v0.201 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -418,7 +418,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div class="brand title-font">마이티<span class="ver-tag">v0.20</span><span>MIGHTY CARD GAME</span></div>
+    <div class="brand title-font">마이티<span class="ver-tag">v0.201</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -665,7 +665,7 @@ function sortHand(hand, giruda, mighty){
    이렇게 하면 클라이언트마다 게임 로직이 따로 진행되어 턴이 어긋나는 문제(구버전 버그)가 발생하지 않습니다.
 */
 // ⚠️ Render에 서버를 배포한 뒤, 아래 주소를 실제 서비스 주소로 바꿔주세요. (예: wss://mighty-online.onrender.com)
-const ONLINE_SERVER_URL = "wss://YOUR-RENDER-APP.onrender.com";
+const ONLINE_SERVER_URL = "wss://mighty-online-6svd.onrender.com";
 const ONLINE_LIMIT_MS = 20000;
 const online = {ws:null, connected:false, host:false, room:"", playerId:null, nickname:"", players:[], deadline:0, timerHandle:null, uiTimerHandle:null, starting:false};
 

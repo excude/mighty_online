@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.21 -->
+<!-- MIGHTY (마이티) - v0.201 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -418,7 +418,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div class="brand title-font">마이티<span class="ver-tag">v0.21</span><span>MIGHTY CARD GAME</span></div>
+    <div class="brand title-font">마이티<span class="ver-tag">v0.201</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -784,11 +784,11 @@ function connectOnline(nickname, roomCode){
         G = deserializeG(m.state.G);
         Object.assign(matchState, m.state.matchState||{});
         online.deadline = m.state.deadline||0;
-        closeOnlineModals();
         render();
-        if(!online.host){
-          // guest는 로컬 타이머/AI 실행 없이 화면만 최신 상태로 맞춘다. 다음 턴 진행은 host의 broadcast가 담당한다.
-        }
+        // guest는 로컬 타이머/AI 실행 없이 화면만 최신 상태로 맞춘다. 다음 턴 진행은 host의 broadcast가 담당한다.
+        // 다만, "내 차례"로 바뀐 배팅/카드교환/프렌드 지목 화면은 host의 scheduleXXX()가 아니라
+        // 여기서 직접 띄워줘야 한다 (그렇지 않으면 게스트 화면에 해당 팝업이 뜨지 않는 버그가 생긴다).
+        guestMaybePromptTurn();
       }
     } else if(m.type==="timer"){
       online.deadline = m.deadline||0; onlineRenderTimer();
@@ -808,6 +808,23 @@ function connectOnline(nickname, roomCode){
   ws.onerror = (e)=>{ console.error("온라인 서버 연결 오류", url, e); };
 }
 function logMsgSafe(s){ if(G && typeof logMsg==="function") logMsg(s); }
+// 게스트 화면에서 "내 차례"로 바뀐 단계(배팅/카드교환/프렌드 지목)의 팝업을 직접 띄워준다.
+// host는 scheduleBidStep()/scheduleTurn() 등에서 renderXXXUI()를 직접 호출하지만,
+// 게스트는 그런 스케줄 함수를 실행하지 않고 host의 state 브로드캐스트만 받으므로 여기서 대신 처리한다.
+function guestMaybePromptTurn(){
+  if(!G || online.host) return;
+  const my = meId();
+  if(G.phase==="bidding" && G.bidTurn===my){
+    renderBiddingUI();
+  } else if(G.phase==="exchange" && G.declarer===my){
+    if(!G.exchangeSelected) G.exchangeSelected = new Set();
+    renderExchangeUI();
+  } else if(G.phase==="friend" && G.declarer===my){
+    renderFriendUI();
+  } else {
+    closeOnlineModals();
+  }
+}
 function closeOnlineModals(){
   const overlay = document.getElementById("modalOverlay");
   if(overlay) overlay.classList.remove("show");
@@ -906,7 +923,7 @@ function computeXpGain(r){
     if(r.isBaekRun) breakdown.push({label:"🛡 백런 방어", amount:15});
     if(r.isNoTrump) breakdown.push({label:"🌀 노 기루다", amount:8});
     if(G.solo && r.myTeam==="declarer") breakdown.push({label:"👑 솔로 성공", amount:20});
-    if(G.declarer===0 && r.myTeam==="declarer") breakdown.push({label:"⭐ 주공 승리", amount:10});
+    if(G.declarer===meId() && r.myTeam==="declarer") breakdown.push({label:"⭐ 주공 승리", amount:10});
   } else {
     breakdown.push({label:"💔 패배", amount:-10});
     const marginPenalty = Math.max(0, Math.min(15, Math.round(r.margin||0)));
@@ -1934,8 +1951,8 @@ function renderHand(){
   let selectable = [];
   if(G.phase==="play" && G.trick.length<5){
     const turnIdx = (G.leader + G.trick.length)%5;
-    if(turnIdx===0) selectable = validMoves(0);
-  } else if(G.phase==="exchange" && G.declarer===0){
+    if(turnIdx===meId()) selectable = validMoves(meId());
+  } else if(G.phase==="exchange" && G.declarer===meId()){
     selectable = me.hand.slice();
   }
   me.hand.forEach(card=>{
@@ -1962,8 +1979,8 @@ function onHandCardClick(card){
   if(G.phase==="play"){
     if(G.trick.length>=5) return; // 5장이 모인 트릭은 판정 대기 중이므로 추가 입력 무시 (경합 방지)
     const turnIdx = (G.leader + G.trick.length)%5;
-    if(turnIdx!==0) return;
-    const mv = validMoves(0);
+    if(turnIdx!==meId()) return;
+    const mv = validMoves(meId());
     if(!mv.includes(card)) return;
     const wasLead = G.trick.length===0;
     playCard(meId(), card);
@@ -1972,7 +1989,7 @@ function onHandCardClick(card){
     } else {
       scheduleTurn();
     }
-  } else if(G.phase==="exchange" && G.declarer===0){
+  } else if(G.phase==="exchange" && G.declarer===meId()){
     if(!G.exchangeSelected) G.exchangeSelected = new Set();
     if(G.exchangeSelected.has(card)) G.exchangeSelected.delete(card);
     else { if(G.exchangeSelected.size>=3) return; G.exchangeSelected.add(card); }
@@ -2003,7 +2020,7 @@ function openJokerLeadSuitPicker(onDone){
 function renderActionBar(){
   const bar = document.getElementById("actionBar");
   bar.innerHTML="";
-  if(G.phase==="exchange" && G.declarer===0){
+  if(G.phase==="exchange" && G.declarer===meId()){
     if(!G.exchangeSelected) G.exchangeSelected = new Set();
     const btn = document.createElement("button");
     btn.className="btn";

@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.204 -->
+<!-- MIGHTY (마이티) - v0.205 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -441,7 +441,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.204</span><span>MIGHTY CARD GAME</span></div>
+    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.205</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -1683,9 +1683,42 @@ function evalTrickWinnerSim(trick, ledSuitOverride){
    손패를 메모리상에 들고 있으므로, 이를 활용해 다양한 진행을 미리 시뮬레이션해보고
    자기 팀에게 가장 유리한 결과로 이어지는 카드를 선택한다. 화면/로그에는 아무것도 남기지 않으며
    실제 게임 상태(G)는 건드리지 않고 항상 복제본(snapshot) 위에서만 시뮬레이션한다. */
-function cloneStateForSim(){
+// 시뮬레이션을 하는 시점에 viewerId가 아직 직접 보지 못한(자기 손패도 아니고 이미 나온 카드도 아닌) 카드 목록.
+// 팀메이트의 실제 손패를 추정할 때 이 풀에서 무작위로 뽑아 쓴다(상대팀 손패는 여전히 실제 정보를 그대로 사용).
+function unseenCardsFor(viewerId){
+  const seen = new Set(G.players[viewerId].hand);
+  for(const p of G.players){ for(const c of p.won) seen.add(c); }
+  for(const t of G.trick) seen.add(t.card);
+  return makeDeck().filter(c=>!seen.has(c));
+}
+// viewerId 입장에서 "팀메이트"(주공↔프렌드) id. 팀메이트가 없거나(솔로/프렌드 미공개) 자기 자신뿐이면 null.
+function teammateOf(viewerId){
+  if(G.solo || G.friendPlayerId===null) return null;
+  if(viewerId===G.declarer) return G.friendPlayerId;
+  if(viewerId===G.friendPlayerId) return G.declarer;
+  return null;
+}
+// viewerId 관점의 시뮬레이션 상태 복제본을 만든다.
+// - 자기 자신의 손패: 실제 그대로
+// - 상대 팀(수비) 손패: 실제 그대로 (기존과 동일하게 전지적으로 활용)
+// - 팀메이트(주공↔프렌드) 손패: 실제 정보를 쓰지 않고, 아직 보지 못한 카드 풀에서 무작위로 추정한 손패를 사용
+//   → 주공 AI는 프렌드의 손패를, 프렌드 AI는 주공의 손패를 알 수 없다.
+function cloneStateForSim(viewerId){
+  const mateId = (viewerId===undefined)? null : teammateOf(viewerId);
+  let guessPool=null, guessIdx=0;
+  if(mateId!==null) guessPool = shuffle(unseenCardsFor(viewerId));
   return {
-    players: G.players.map(p=>({id:p.id, isHuman:p.isHuman, hand:p.hand.slice(), won:p.won.slice()})),
+    players: G.players.map(p=>{
+      let hand;
+      if(p.id===mateId){
+        const n = p.hand.length;
+        hand = guessPool.slice(guessIdx, guessIdx+n);
+        guessIdx += n;
+      } else {
+        hand = p.hand.slice();
+      }
+      return {id:p.id, isHuman:p.isHuman, hand, won:p.won.slice()};
+    }),
     giruda: G.giruda, mighty: G.mighty, declarer: G.declarer, bidCount: G.bidCount,
     friendCard: G.friendCard, friendPlayerId: G.friendPlayerId, friendRevealed: G.friendRevealed, solo: G.solo, friendMode: G.friendMode,
     leader: G.leader, trick: G.trick.map(t=>({playerId:t.playerId, card:t.card})), ledSuit: G.ledSuit, trickNum: G.trickNum
@@ -1723,7 +1756,7 @@ function simPlayOutRemainder(){
 // 후보 카드 하나를 냈다고 가정하고, 그 이후를 끝까지 시뮬레이션했을 때 우리 팀이 획득하는 점수패 수를 반환
 function simRolloutScore(playerId, card){
   const backupG = G;
-  const snapshot = cloneStateForSim();
+  const snapshot = cloneStateForSim(playerId);
   G = snapshot;
   try{
     simPlayCard(playerId, card);
@@ -1747,25 +1780,32 @@ function aiChooseCardOmniscient(playerId, moves){
     const noJoker = moves.filter(c=>c!==JOKER);
     if(noJoker.length>0) candidateMoves = noJoker;
   }
-  // 이미 같은 팀(주공/프렌드)이 이 트릭을 이기고 있는 경우: 남아서 낼 다른 플레이어들의 실제 손패(전지적 정보)를
-  // 확인해, 아무도 현재 최고점을 뒤집을 수 없다면 굳이 강한 카드를 낭비하지 않고 가장 낮은 카드로 따라간다.
-  // (아직 못 낸 상대가 현재 최고점을 뒤집을 수 있는 카드를 갖고 있다면 안전하지 않으므로 이 지름길을 적용하지 않는다)
+  // 이미 같은 팀(주공/프렌드)이 이 트릭을 이기고 있는 경우: 팀메이트를 마이티/조커 같은 카드로
+  // 애써 다시 이길 필요가 없다. 아직 못 낸 "상대팀"의 실제 손패(전지적 정보, 나머지 플레이어 패는 계속 알 수 있음)를
+  // 확인해 실제로 뒤집을 수 있는 위협이 있는지 정확히 계산하고,
+  //  - 위협이 전혀 없으면: 가장 낮은 카드로 그냥 따라간다 (조커/마이티 등은 절대 낭비하지 않는다)
+  //  - 위협이 있으면: 그 위협을 넘어서는 카드 중 "가장 약한" 카드로만 최소한으로 대응한다
+  //    (조커까지 갈 필요 없이 위협을 넘길 수 있으면 조커는 그대로 아낀다)
+  //  - 그 위협조차 어떤 카드로도 넘어설 수 없으면: 역시 강한 카드를 낭비하지 않고 가장 낮은 카드를 낸다
   if(G.trick.length>0){
     const currentLeaderId = evalTrickWinnerSim(G.trick);
     if(currentLeaderId!==playerId && teamOf(currentLeaderId)===teamOf(playerId)){
       const currentBestScore = Math.max(...G.trick.map(t=>cardTrickScore(t.card, G.trick, G.ledSuit)));
-      let threatExists = false;
-      for(let step=G.trick.length; step<5 && !threatExists; step++){
+      let maxThreat = -Infinity;
+      for(let step=G.trick.length; step<5; step++){
         const pid = (G.leader+step)%5;
-        if(pid===playerId) continue;
+        if(pid===playerId || teamOf(pid)===teamOf(playerId)) continue; // 우리 팀은 위협이 아님
         for(const c of G.players[pid].hand){
-          if(cardTrickScore(c, G.trick, G.ledSuit) > currentBestScore){ threatExists = true; break; }
+          const s = cardTrickScore(c, G.trick, G.ledSuit);
+          if(s>maxThreat) maxThreat = s;
         }
       }
-      if(!threatExists){
-        const sorted = candidateMoves.slice().sort((a,b)=>aiCardWeight(a)-aiCardWeight(b));
+      const sorted = candidateMoves.slice().sort((a,b)=>aiCardWeight(a)-aiCardWeight(b));
+      if(maxThreat <= currentBestScore){
         return sorted[0];
       }
+      const sufficient = sorted.filter(c=>cardTrickScore(c, G.trick, G.ledSuit) > maxThreat);
+      return sufficient.length ? sufficient[0] : sorted[0];
     }
   }
   const ROLLOUTS = 5;

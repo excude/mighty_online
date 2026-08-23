@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.207 -->
+<!-- MIGHTY (마이티) - v0.208 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -441,7 +441,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.207</span><span>MIGHTY CARD GAME</span></div>
+    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.208</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -896,10 +896,20 @@ function guestMaybePromptTurn(){
     renderExchangeUI();
   } else if(G.phase==="friend" && G.declarer===my){
     renderFriendUI();
+  } else if(G.phase==="result"){
+    // 방장(host)이 finishGame()에서 결과를 계산해 브로드캐스트하면, 게스트는 여기서 자기 화면에도
+    // 결과 모달을 띄워줘야 한다. 그렇지 않으면 방장 화면에만 결과가 나오고 게스트는 그냥 대기 화면에
+    // 머무는 버그가 생긴다. resultSeq(매치가 바뀌어도 계속 증가하는 값)로 "이미 보여준 결과"인지
+    // 판별해서, 같은 결과를 중복으로 다시 열어 애니메이션/모달을 리셋하지 않도록 한다.
+    if(guestLastResultSeq !== matchState.resultSeq){
+      guestLastResultSeq = matchState.resultSeq;
+      renderResultUI();
+    }
   } else {
     closeOnlineModals();
   }
 }
+let guestLastResultSeq = -1;
 function closeOnlineModals(){
   const overlay = document.getElementById("modalOverlay");
   if(overlay) overlay.classList.remove("show");
@@ -1033,7 +1043,9 @@ const matchState = {
   history:[],
   startScore:50,
   endMode:"rounds", // "rounds" | "bust"
-  scores:[50,50,50,50,50]
+  scores:[50,50,50,50,50],
+  resultSeq:0 // 결과가 나올 때마다 host가 1씩 올리는 값. 온라인 게스트가 "새로운 결과인지"를 라운드 번호가
+              // 매치마다 초기화되는 것과 무관하게 안정적으로 판별하기 위해 사용한다.
 };
 
 /* ============================ 경험치 / 레벨 프로필 (매치와 무관하게 영구 저장) ============================ */
@@ -2023,6 +2035,7 @@ function finishGame(){
   saveProfile();
 
   matchState.nextDealer = (G.dealer+1)%5;
+  matchState.resultSeq = (matchState.resultSeq||0) + 1;
   matchState.history.push({
     round: matchState.currentRound,
     declarer: G.players[G.declarer].name,

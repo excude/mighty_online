@@ -539,13 +539,47 @@ if(window.visualViewport) window.visualViewport.addEventListener("resize", setVi
 */
 let sfxCtx = null;
 let sfxMuted = false;
-function getSfxCtx(){
+let sfxUnlocked = false;
+function ensureSfxCtx(){
   if(!sfxCtx){
     try{ sfxCtx = new (window.AudioContext || window.webkitAudioContext)(); }catch(e){ return null; }
   }
-  if(sfxCtx.state==="suspended") sfxCtx.resume().catch(()=>{});
   return sfxCtx;
 }
+// 아이폰 사파리는 화면 전환/전화 수신 등으로 오디오 컨텍스트가 "suspended" 뿐 아니라
+// "interrupted" 상태가 되기도 한다. running이 아니면 상태와 무관하게 무조건 재개를 시도한다.
+function resumeSfxCtx(){
+  const ctx = sfxCtx;
+  if(!ctx) return Promise.resolve(null);
+  if(ctx.state==="running") return Promise.resolve(ctx);
+  return ctx.resume().then(()=>ctx).catch(()=>ctx);
+}
+function getSfxCtx(){
+  const ctx = ensureSfxCtx();
+  if(ctx && ctx.state!=="running") resumeSfxCtx();
+  return ctx;
+}
+// 아이폰 사파리는 실제 사용자 터치 이벤트 "안에서" 오디오를 한 번 재생해야 이후 자동(타이머 등) 재생도
+// 막히지 않는다. 화면을 처음 탭/클릭하는 순간 무음 버퍼를 한 번 실제로 재생시켜 잠금을 확실히 풀어둔다.
+function unlockSfxOnce(){
+  if(sfxUnlocked) return;
+  sfxUnlocked = true;
+  const ctx = ensureSfxCtx();
+  if(!ctx) return;
+  try{
+    const buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(ctx.destination);
+    src.start(0);
+  }catch(e){}
+  resumeSfxCtx();
+}
+["touchstart","touchend","pointerdown","mousedown","click","keydown"].forEach(evt=>{
+  document.addEventListener(evt, unlockSfxOnce, {once:true, passive:true});
+});
+// 다른 화면(앱 전환 등)에 나갔다 돌아왔을 때 오디오 컨텍스트가 잠들어 있을 수 있어 다시 깨워준다.
+document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) resumeSfxCtx(); });
 // 하나의 톤(oscillator)을 짧게 재생. freq: 주파수(Hz) 또는 [시작,끝] 배열(글리산도), type: 파형
 function sfxTone(ctx, freq, startTime, duration, {type="sine", gain=0.18, attack=0.005, release=0.05}={}){
   const osc = ctx.createOscillator();
@@ -613,7 +647,15 @@ function sfxPlay(key){
     const ctx = getSfxCtx();
     if(!ctx) return;
     const pattern = SFX_PATTERNS[key];
-    if(pattern) pattern(ctx, ctx.currentTime);
+    if(!pattern) return;
+    if(ctx.state!=="running"){
+      // 아직 잠겨있는 상태라면 그냥 버리지 않고, 깨어나는 대로 재생한다.
+      resumeSfxCtx().then((resumedCtx)=>{
+        if(resumedCtx && resumedCtx.state==="running" && !sfxMuted) pattern(resumedCtx, resumedCtx.currentTime);
+      });
+      return;
+    }
+    pattern(ctx, ctx.currentTime);
   }catch(e){ /* 무시 */ }
 }
 async function loadSfxPref(){

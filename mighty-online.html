@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.206 -->
+<!-- MIGHTY (마이티) - v0.207 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -441,7 +441,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.206</span><span>MIGHTY CARD GAME</span></div>
+    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.207</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -705,6 +705,9 @@ function sortHand(hand, giruda, mighty){
 const ONLINE_SERVER_URL = "wss://mighty-online-6svd.onrender.com";
 const ONLINE_LIMIT_MS = 20000;
 const online = {ws:null, connected:false, host:false, room:"", playerId:null, nickname:"", players:[], deadline:0, timerHandle:null, uiTimerHandle:null, starting:false};
+// 온라인 방장이 로비에서 고르는 매치 설정(시작 점수/종료 방식/판 수). 로비가 재렌더링(인원 변경 등)되어도
+// 방장이 고른 값이 초기화되지 않도록 모듈 스코프에 별도로 보관해둔다.
+const onlineLobbySettings = {startScore:50, endMode:"rounds", totalRounds:1};
 
 function onlineEnabled(){ return !!(online.connected && online.ws && online.ws.readyState===WebSocket.OPEN); }
 function meId(){ return onlineEnabled() ? online.playerId : 0; }
@@ -904,12 +907,33 @@ function closeOnlineModals(){
 function renderOnlineLobby(){
   if(!online.connected) return;
   const rows = online.players.map(p=>`<div class="online-player-row"><span class="dot"></span><span>${escHtml(p.name)}</span><span style="margin-left:auto;opacity:.55">${p.host?"방장":"플레이어"}</span></div>`).join("");
+  const presets = [1,3,5,7,9];
+  const optHtml = presets.map(n=>`<div class="count-opt" data-n="${n}" style="width:44px;">${n}판</div>`).join("");
+  const settingsHtml = online.host ? `
+    <p class="sub" style="margin-top:10px;">시작 점수 (보통 50점)</p>
+    <div class="row"><input type="number" id="onlineStartScoreInput" value="${onlineLobbySettings.startScore}" min="0" max="999" style="flex:1;padding:9px 10px;border-radius:8px;border:1px solid var(--line);background:#0000002a;color:var(--paper);font-size:14px;"></div>
+    <p class="sub">종료 방식</p>
+    <div class="row" id="onlineEndModeRow">
+      <div class="suit-opt${onlineLobbySettings.endMode==="rounds"?" sel":""}" data-mode="rounds" style="font-size:13px;">📅 정해진 판 수</div>
+      <div class="suit-opt${onlineLobbySettings.endMode==="bust"?" sel":""}" data-mode="bust" style="font-size:13px;">💥 점수 소진 시까지</div>
+    </div>
+    <div id="onlineRoundCountSection" style="display:${onlineLobbySettings.endMode==="rounds"?"":"none"};">
+      <p class="sub">몇 판을 진행할까요? 매판마다 딜러가 자동으로 바뀝니다.</p>
+      <div class="count-row" id="onlineRoundRow">${optHtml}</div>
+      <p class="sub">직접 입력</p>
+      <div class="row"><input type="number" id="onlineCustomRounds" min="1" max="99" placeholder="예: 4" value="${presets.includes(onlineLobbySettings.totalRounds)?"":onlineLobbySettings.totalRounds}" style="flex:1;padding:9px 10px;border-radius:8px;border:1px solid var(--line);background:#0000002a;color:var(--paper);font-size:14px;"></div>
+    </div>
+    <p class="sub" id="onlineBustHint" style="display:${onlineLobbySettings.endMode==="bust"?"":"none"};">한 명이라도 점수가 0점 이하가 되면 그 판을 마지막으로 매치가 종료됩니다.</p>
+  ` : `
+    <p class="online-hint" style="margin-top:10px;">시작 점수: ${onlineLobbySettings.startScore}점 · ${onlineLobbySettings.endMode==="bust"?"점수 소진 시까지":onlineLobbySettings.totalRounds+"판"}</p>
+  `;
   openModal(`
     <h2>온라인 방</h2>
     <p class="sub">친구에게 아래 방 코드를 알려주세요. (최대 5명, 부족한 자리는 AI로 채워집니다)</p>
     <div class="room-code">${escHtml(online.room)}</div>
     ${rows}
-    <p class="online-hint">${online.host? "인원이 모이면 방장이 게임 시작을 눌러주세요." : "방장이 게임을 시작하면 자동으로 화면이 전환됩니다."}</p>
+    ${settingsHtml}
+    <p class="online-hint">${online.host? "설정을 정하고 인원이 모이면 게임 시작을 눌러주세요." : "방장이 게임을 시작하면 자동으로 화면이 전환됩니다."}</p>
     <div class="modal-actions">
       ${online.host? `<button class="btn" id="onlineStartBtn">게임 시작</button>` : ``}
       <button class="btn ghost" id="onlineLeaveBtn">나가기</button>
@@ -919,6 +943,41 @@ function renderOnlineLobby(){
   if(leaveBtn) leaveBtn.onclick = ()=>{ closeModal(); onlineDisconnect(); showRoundSetup(); };
   const startBtn = document.getElementById("onlineStartBtn");
   if(startBtn) startBtn.onclick = ()=>{ closeModal(); startOnlineGame(); };
+  if(!online.host) return;
+  const startScoreInput = document.getElementById("onlineStartScoreInput");
+  if(startScoreInput) startScoreInput.addEventListener("input", (e)=>{
+    const v = parseInt(e.target.value,10);
+    onlineLobbySettings.startScore = isNaN(v)? 50 : v;
+  });
+  document.querySelectorAll("#onlineRoundRow .count-opt").forEach(el=>{
+    el.onclick = ()=>{
+      document.querySelectorAll("#onlineRoundRow .count-opt").forEach(x=>x.classList.remove("sel"));
+      el.classList.add("sel");
+      onlineLobbySettings.totalRounds = parseInt(el.dataset.n,10);
+      const custom = document.getElementById("onlineCustomRounds");
+      if(custom) custom.value="";
+    };
+    if(parseInt(el.dataset.n,10)===onlineLobbySettings.totalRounds) el.classList.add("sel");
+  });
+  const customRounds = document.getElementById("onlineCustomRounds");
+  if(customRounds) customRounds.addEventListener("input",(e)=>{
+    const v = parseInt(e.target.value,10);
+    if(v>=1){
+      onlineLobbySettings.totalRounds = v;
+      document.querySelectorAll("#onlineRoundRow .count-opt").forEach(x=>x.classList.remove("sel"));
+    }
+  });
+  document.querySelectorAll("#onlineEndModeRow .suit-opt").forEach(el=>{
+    el.onclick = ()=>{
+      document.querySelectorAll("#onlineEndModeRow .suit-opt").forEach(x=>x.classList.remove("sel"));
+      el.classList.add("sel");
+      onlineLobbySettings.endMode = el.dataset.mode;
+      const sec = document.getElementById("onlineRoundCountSection");
+      if(sec) sec.style.display = onlineLobbySettings.endMode==="rounds"? "" : "none";
+      const hint = document.getElementById("onlineBustHint");
+      if(hint) hint.style.display = onlineLobbySettings.endMode==="bust"? "" : "none";
+    };
+  });
 }
 function showOnlineEntry(){
   let saved=""; try{ saved = localStorage.getItem("mighty_online_nickname")||""; }catch(e){}
@@ -955,8 +1014,13 @@ function buildRoster(){
 function startOnlineGame(){
   if(!online.host || online.starting) return;
   online.starting = true;
-  matchState.history=[]; matchState.currentRound=0; matchState.scores=[50,50,50,50,50];
-  matchState.totalRounds=1; matchState.endMode="rounds"; matchState.nextDealer=Math.floor(Math.random()*5);
+  matchState.history=[]; matchState.currentRound=0;
+  const startScore = Math.max(0, Math.min(999, isNaN(onlineLobbySettings.startScore)? 50 : onlineLobbySettings.startScore));
+  matchState.startScore = startScore;
+  matchState.scores = [0,1,2,3,4].map(()=>startScore);
+  matchState.endMode = onlineLobbySettings.endMode==="bust" ? "bust" : "rounds";
+  matchState.totalRounds = Math.max(1, Math.min(99, onlineLobbySettings.totalRounds||1));
+  matchState.nextDealer=Math.floor(Math.random()*5);
   newGame();
   online.starting = false;
 }
@@ -1783,23 +1847,57 @@ function aiChooseCardOmniscient(playerId, moves){
   // 이미 같은 팀(주공/프렌드)이 이 트릭을 이기고 있는 경우: 팀메이트를 마이티/조커 같은 카드로
   // 애써 다시 이길 필요가 없다. 아직 못 낸 "상대팀"의 실제 손패(전지적 정보, 나머지 플레이어 패는 계속 알 수 있음)를
   // 확인해 실제로 뒤집을 수 있는 위협이 있는지 정확히 계산하고,
-  //  - 위협이 전혀 없으면: 가장 낮은 카드로 그냥 따라간다 (조커/마이티 등은 절대 낭비하지 않는다)
-  //  - 위협이 있으면: 그 위협을 넘어서는 카드 중 "가장 약한" 카드로만 최소한으로 대응한다
-  //    (조커까지 갈 필요 없이 위협을 넘길 수 있으면 조커는 그대로 아낀다)
-  //  - 그 위협조차 어떤 카드로도 넘어설 수 없으면: 역시 강한 카드를 낭비하지 않고 가장 낮은 카드를 낸다
+  // 이미 같은 팀(주공/프렌드)이 이 트릭을 이기고 있는 경우: 팀메이트를 마이티/조커 같은 카드로
+  // 무조건 다시 이길 필요는 없다. 아직 못 낸 "상대팀"의 실제 손패(전지적 정보)를 확인해
+  // 정말로 뒤집을 수 있는 위협이 있는지 계산하고,
+  //  - 위협이 없으면: 가장 낮은 카드로 그냥 따라간다 (조커/마이티는 낭비하지 않는다)
+  //  - 위협이 있고, 그걸 막는 데 마이티/조커가 필요 없으면: 위협을 넘는 가장 약한 카드로만 대응한다
+  //  - 위협이 있고, 막으려면 마이티/조커가 필요한 경우: 무조건 쓰지도, 무조건 아끼지도 않는다.
+  //    "막았을 때"와 "그냥 내준(트릭을 포기한) 때"를 각각 시뮬레이션해 우리 팀 최종 점수패 획득량을
+  //    비교해서, 정말로 지금 나서는 편이 더 유리한 "위기 상황"일 때만 마이티/조커를 꺼내고,
+  //    그렇지 않으면(다른 트릭에서 만회 가능하면) 아낀다.
   if(G.trick.length>0){
     const currentLeaderId = evalTrickWinnerSim(G.trick);
     if(currentLeaderId!==playerId && teamOf(currentLeaderId)===teamOf(playerId)){
-      // 우리 팀(주공/프렌드)이 이미 이 트릭을 이기고 있는 경우: 아직 안 낸 상대 패 중에
-      // 이론적으로 뒤집을 수 있는 위협(예: 조커)이 남아있더라도, 그걸 막겠다고 마이티/조커 같은
-      // 최강 카드를 미리 써버리지 않는다. 트릭 한 판 정도는 내줘도 되고, 마이티/조커는 정말
-      // 우리가 직접 승부를 봐야 하는 순간을 위해 아낀다.
+      const currentBestScore = Math.max(...G.trick.map(t=>cardTrickScore(t.card, G.trick, G.ledSuit)));
+      let maxThreat = -Infinity;
+      for(let step=G.trick.length; step<5; step++){
+        const pid = (G.leader+step)%5;
+        if(pid===playerId || teamOf(pid)===teamOf(playerId)) continue; // 우리 팀은 위협이 아님
+        for(const c of G.players[pid].hand){
+          const s = cardTrickScore(c, G.trick, G.ledSuit);
+          if(s>maxThreat) maxThreat = s;
+        }
+      }
       const nonSpecial = candidateMoves.filter(c=>c!==G.mighty && c!==JOKER);
-      const pool = nonSpecial.length? nonSpecial : candidateMoves;
-      const sorted = pool.slice().sort((a,b)=>aiCardWeight(a)-aiCardWeight(b));
-      // 다만 8~9트릭까지 조커를 계속 쥐고 있으면 결국 마지막에 갇혀 무조건 지므로, 그때는 예외적으로 처리한다.
+      const concedeCard = (nonSpecial.length? nonSpecial : candidateMoves).slice().sort((a,b)=>aiCardWeight(a)-aiCardWeight(b))[0];
+      if(maxThreat <= currentBestScore){
+        // 위협 자체가 없다: 마이티/조커는 절대 낭비하지 않는다.
+        if(jokerRunningOutOfTime() && candidateMoves.includes(JOKER)) return JOKER;
+        return concedeCard;
+      }
+      const sorted = candidateMoves.slice().sort((a,b)=>aiCardWeight(a)-aiCardWeight(b));
+      const sufficient = sorted.filter(c=>cardTrickScore(c, G.trick, G.ledSuit) > maxThreat);
+      const defendCard = sufficient.length ? sufficient[0] : sorted[0];
+      if(defendCard!==G.mighty && defendCard!==JOKER){
+        // 위협을 넘기는 데 마이티/조커가 필요 없다면 고민할 것 없이 그냥 방어한다.
+        return defendCard;
+      }
+      if(defendCard===concedeCard){
+        // 마이티/조커 말고는 낼 카드가 없다면 아낄 방법이 없으므로 그대로 방어한다.
+        return defendCard;
+      }
+      // 진짜 "위기 상황"인지 시뮬레이션으로 판단: 지금 마이티/조커로 막았을 때와
+      // 그냥 트릭을 내줬을 때 각각의 우리 팀 최종 점수패 획득량을 비교한다.
+      const ROLLOUTS_CRISIS = 6;
+      let defendSum=0, concedeSum=0;
+      for(let i=0;i<ROLLOUTS_CRISIS;i++){
+        defendSum += simRolloutScore(playerId, defendCard);
+        concedeSum += simRolloutScore(playerId, concedeCard);
+      }
+      if(defendSum > concedeSum + 1e-9) return defendCard;
       if(jokerRunningOutOfTime() && candidateMoves.includes(JOKER)) return JOKER;
-      return sorted[0];
+      return concedeCard;
     }
   }
   const ROLLOUTS = 5;

@@ -62,7 +62,9 @@ function makeToken() {
 }
 
 // 연결이 끊긴 뒤 완전히 방을 나간 것으로 처리하기까지 기다려주는 유예 시간
-const RECONNECT_GRACE_MS = 45000;
+// (예전에는 45초 동안 AI가 대신 진행하다가 자리를 대체했지만, 지금은 짧게 10초만
+//  기다려주고 그 안에 돌아오지 않으면 AI로 계속 진행하는 대신 게임 자체를 종료한다.)
+const RECONNECT_GRACE_MS = 10000;
 
 function publicPlayers(room) {
   return room.players.map((p) => ({ id: p.id, name: p.name, host: p.host, connected: p.connected !== false }));
@@ -231,36 +233,24 @@ wss.on("connection", (ws) => {
       if (p.id !== player.id) send(p.ws, { type: "peer_away", name: player.name });
     }
 
-    // 유예 시간 안에 재접속하지 않으면 그때 완전히 방을 나간 것으로 처리한다.
+    // 유예 시간(10초) 안에 재접속하지 않으면, 그 자리를 AI로 대체해서 계속 진행하는 대신
+    // 게임 자체를 종료한다. 남아있는 모든 사람에게 종료 사실을 알리고 방을 정리한다.
     player.leaveTimer = setTimeout(() => {
       const idx = room.players.findIndex((p) => p.id === player.id);
       if (idx === -1) return;
       const leaving = room.players[idx];
-      if (leaving.connected) return; // 그 사이에 재접속했다면 제거하지 않는다
-      room.players.splice(idx, 1);
-
-      if (room.players.length === 0) {
-        rooms.delete(joined.roomCode);
-        return;
-      }
-
-      // 방장이 끝내 돌아오지 않았다면 남은 사람 중 가장 먼저 들어온 사람을 새 방장으로 승격
-      if (leaving.host) {
-        room.players[0].host = true;
-        send(room.players[0].ws, {
-          type: "welcome",
-          playerId: room.players[0].id,
-          host: true,
-          room: room.code,
-          token: room.players[0].token,
-          players: publicPlayers(room),
-        });
-      }
+      if (leaving.connected) return; // 그 사이에 재접속했다면 아무것도 하지 않는다
 
       for (const p of room.players) {
-        send(p.ws, { type: "peer_left", name: leaving.name });
+        if (p.leaveTimer) {
+          clearTimeout(p.leaveTimer);
+          p.leaveTimer = null;
+        }
+        if (p.id !== leaving.id) {
+          send(p.ws, { type: "room_closed", reason: "disconnect_timeout", name: leaving.name });
+        }
       }
-      broadcastLobby(room);
+      rooms.delete(joined.roomCode);
     }, RECONNECT_GRACE_MS);
   });
 });

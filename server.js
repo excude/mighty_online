@@ -5,18 +5,44 @@
 // 브라우저가 전부 계산하고, 그 결과를 이 서버를 통해 나머지 사람들에게 뿌립니다.
 //
 // 배포 방법 (Render):
-//   1) 이 폴더(mighty-server) 전체를 GitHub 저장소에 올립니다.
+//   1) 이 server.js와 게임 html 파일(mighty-online.html)을 같은 폴더(mighty-server)에 넣고
+//      GitHub 저장소에 함께 올립니다. (같은 폴더에 있어야 아래에서 자동으로 찾아서 서빙합니다)
 //   2) Render 대시보드 -> New -> Web Service -> 해당 저장소 선택
 //   3) Build Command: npm install / Start Command: npm start (Render가 자동 인식)
 //   4) 배포가 끝나면 https://<앱이름>.onrender.com 주소가 생기고,
-//      마이티 게임 HTML 파일 안의 ONLINE_SERVER_URL 을
-//      wss://<앱이름>.onrender.com 으로 바꿔주면 됩니다.
+//      그 주소로 바로 접속하면 게임 화면(mighty-online.html)이 뜹니다.
+//      게임 안의 ONLINE_SERVER_URL 은 wss://<앱이름>.onrender.com 으로 맞춰주세요.
 // -----------------------------------------------------------------------------
 
 const http = require("http");
+const fs = require("fs");
+const path = require("path");
 const { WebSocketServer } = require("ws");
 
 const PORT = process.env.PORT || 3000;
+
+// 이 서버와 같은 폴더에 게임 html 파일을 함께 배포해두면, 주소로 바로 접속했을 때
+// 아래 후보 이름들 중 있는 파일을 찾아 그대로 보여준다. (index.html을 최우선으로 찾는다)
+// -> Render에 올릴 때 이 server.js와 게임 html 파일(예: index.html)을 같은 저장소/폴더에 넣어주세요.
+const HTML_CANDIDATES = ["mighty-online.html", "index.html", "mighty-online2-5.html", "mighty.html", "game.html"];
+let gameHtml = null;
+let gameHtmlName = null;
+for (const name of HTML_CANDIDATES) {
+  const p = path.join(__dirname, name);
+  if (fs.existsSync(p)) {
+    gameHtml = fs.readFileSync(p);
+    gameHtmlName = name;
+    break;
+  }
+}
+if (gameHtml) {
+  console.log(`게임 화면 파일을 찾았습니다: ${gameHtmlName} (루트 주소에서 바로 보여줍니다)`);
+} else {
+  console.warn(
+    "게임 html 파일을 찾지 못했습니다. server.js와 같은 폴더에 index.html(또는 mighty-online2-5.html)을 함께 배포하면 " +
+      "주소로 바로 접속했을 때 게임 화면이 뜹니다. 지금은 웹소켓 릴레이 기능만 동작합니다."
+  );
+}
 
 // room code -> { players: [{id, ws, name, host}], nextId }
 const rooms = new Map();
@@ -54,7 +80,13 @@ function send(ws, obj) {
 }
 
 const server = http.createServer((req, res) => {
-  // 헬스체크용 (Render가 주기적으로 접속을 확인합니다)
+  // 웹소켓 업그레이드가 아닌 일반 GET 요청이면 게임 화면(html)을 그대로 보여준다.
+  if (gameHtml && req.method === "GET") {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(gameHtml);
+    return;
+  }
+  // 게임 html을 못 찾았을 때(또는 헬스체크)는 기존처럼 안내 텍스트만 응답한다.
   res.writeHead(200, { "Content-Type": "text/plain" });
   res.end("mighty online relay server is running");
 });

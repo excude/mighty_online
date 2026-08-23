@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.209 -->
+<!-- MIGHTY (마이티) - v0.210 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -441,7 +441,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.209</span><span>MIGHTY CARD GAME</span></div>
+    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.210</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -1894,31 +1894,23 @@ function unseenCardsFor(viewerId){
   for(const t of G.trick) seen.add(t.card);
   return makeDeck().filter(c=>!seen.has(c));
 }
-// viewerId 입장에서 "팀메이트"(주공↔프렌드) id. 팀메이트가 없거나(솔로/프렌드 미공개) 자기 자신뿐이면 null.
-function teammateOf(viewerId){
-  if(G.solo || G.friendPlayerId===null) return null;
-  if(viewerId===G.declarer) return G.friendPlayerId;
-  if(viewerId===G.friendPlayerId) return G.declarer;
-  return null;
-}
 // viewerId 관점의 시뮬레이션 상태 복제본을 만든다.
 // - 자기 자신의 손패: 실제 그대로
-// - 상대 팀(수비) 손패: 실제 그대로 (기존과 동일하게 전지적으로 활용)
-// - 팀메이트(주공↔프렌드) 손패: 실제 정보를 쓰지 않고, 아직 보지 못한 카드 풀에서 무작위로 추정한 손패를 사용
-//   → 주공 AI는 프렌드의 손패를, 프렌드 AI는 주공의 손패를 알 수 없다.
+// - 그 외 모든 플레이어(팀메이트든 상대팀이든)의 손패: 전지적 정보를 쓰지 않고,
+//   아직 보지 못한 카드 풀에서 무작위로 추정한 손패를 사용한다.
+//   → 주공/프렌드 AI는 팀메이트뿐 아니라 상대팀 손패도 실제로 알지 못한 채 판단한다.
 function cloneStateForSim(viewerId){
-  const mateId = (viewerId===undefined)? null : teammateOf(viewerId);
-  let guessPool=null, guessIdx=0;
-  if(mateId!==null) guessPool = shuffle(unseenCardsFor(viewerId));
+  const pool = shuffle(unseenCardsFor(viewerId));
+  let idx = 0;
   return {
     players: G.players.map(p=>{
       let hand;
-      if(p.id===mateId){
-        const n = p.hand.length;
-        hand = guessPool.slice(guessIdx, guessIdx+n);
-        guessIdx += n;
-      } else {
+      if(p.id===viewerId){
         hand = p.hand.slice();
+      } else {
+        const n = p.hand.length;
+        hand = pool.slice(idx, idx+n);
+        idx += n;
       }
       return {id:p.id, isHuman:p.isHuman, hand, won:p.won.slice()};
     }),
@@ -1956,23 +1948,30 @@ function simPlayOutRemainder(){
     simPlayCard(turnIdx, aiChooseCard(turnIdx, mv));
   }
 }
-// 후보 카드 하나를 냈다고 가정하고, 그 이후를 끝까지 시뮬레이션했을 때 우리 팀이 획득하는 점수패 수를 반환
-function simRolloutScore(playerId, card){
+// 후보 카드 하나를 냈다고 가정하고, 그 이후를 끝까지 시뮬레이션했을 때 우리 팀이 그 판을 이기는지(1) 지는지(0) 반환
+function simRolloutWin(playerId, card){
   const backupG = G;
   const snapshot = cloneStateForSim(playerId);
   G = snapshot;
   try{
     simPlayCard(playerId, card);
     simPlayOutRemainder();
-    const team = teamOf(playerId);
-    let pts=0;
-    for(const p of G.players){ if(teamOf(p.id)===team) pts += p.won.filter(isScoreCard).length; }
-    return pts;
+    const declarerTeam = new Set([G.declarer]);
+    if(!G.solo && G.friendPlayerId!==null) declarerTeam.add(G.friendPlayerId);
+    let teamPts=0;
+    for(const p of G.players){ if(declarerTeam.has(p.id)) teamPts += p.won.filter(isScoreCard).length; }
+    const target = Math.max(G.bidCount, 13);
+    const declarerWin = teamPts>=target;
+    const myTeam = teamOf(playerId);
+    return (myTeam==="declarer") ? (declarerWin?1:0) : (declarerWin?0:1);
   } finally {
     G = backupG;
   }
 }
-// 주공/프렌드 팀 AI 전용 카드 선택: 여러 번의 가상 진행을 통해 팀에 가장 유리한 카드를 고른다
+// 주공/프렌드 팀 AI 전용 카드 선택: 전지적 정보(상대 실제 손패)를 전혀 들여다보지 않고,
+// 자기 손패와 지금까지 나온 카드만으로 남은 카드들을 무작위로 추정해가며 여러 번 시뮬레이션한다.
+// 후보로 낼 수 있는 카드마다 이렇게 여러 번 판을 끝까지 돌려본 뒤, 우리 팀이 이길 확률이
+// 가장 높았던 카드를 선택한다 (몬테카를로 방식).
 function aiChooseCardOmniscient(playerId, moves){
   if(!moves || moves.length===0) return null; // 방어: 낼 수 있는 카드가 없으면 절대 undefined를 반환하지 않는다
   if(moves.length===1) return moves[0];
@@ -1983,69 +1982,13 @@ function aiChooseCardOmniscient(playerId, moves){
     const noJoker = moves.filter(c=>c!==JOKER);
     if(noJoker.length>0) candidateMoves = noJoker;
   }
-  // 이미 같은 팀(주공/프렌드)이 이 트릭을 이기고 있는 경우: 팀메이트를 마이티/조커 같은 카드로
-  // 애써 다시 이길 필요가 없다. 아직 못 낸 "상대팀"의 실제 손패(전지적 정보, 나머지 플레이어 패는 계속 알 수 있음)를
-  // 확인해 실제로 뒤집을 수 있는 위협이 있는지 정확히 계산하고,
-  // 이미 같은 팀(주공/프렌드)이 이 트릭을 이기고 있는 경우: 팀메이트를 마이티/조커 같은 카드로
-  // 무조건 다시 이길 필요는 없다. 아직 못 낸 "상대팀"의 실제 손패(전지적 정보)를 확인해
-  // 정말로 뒤집을 수 있는 위협이 있는지 계산하고,
-  //  - 위협이 없으면: 가장 낮은 카드로 그냥 따라간다 (조커/마이티는 낭비하지 않는다)
-  //  - 위협이 있고, 그걸 막는 데 마이티/조커가 필요 없으면: 위협을 넘는 가장 약한 카드로만 대응한다
-  //  - 위협이 있고, 막으려면 마이티/조커가 필요한 경우: 무조건 쓰지도, 무조건 아끼지도 않는다.
-  //    "막았을 때"와 "그냥 내준(트릭을 포기한) 때"를 각각 시뮬레이션해 우리 팀 최종 점수패 획득량을
-  //    비교해서, 정말로 지금 나서는 편이 더 유리한 "위기 상황"일 때만 마이티/조커를 꺼내고,
-  //    그렇지 않으면(다른 트릭에서 만회 가능하면) 아낀다.
-  if(G.trick.length>0){
-    const currentLeaderId = evalTrickWinnerSim(G.trick);
-    if(currentLeaderId!==playerId && teamOf(currentLeaderId)===teamOf(playerId)){
-      const currentBestScore = Math.max(...G.trick.map(t=>cardTrickScore(t.card, G.trick, G.ledSuit)));
-      let maxThreat = -Infinity;
-      for(let step=G.trick.length; step<5; step++){
-        const pid = (G.leader+step)%5;
-        if(pid===playerId || teamOf(pid)===teamOf(playerId)) continue; // 우리 팀은 위협이 아님
-        for(const c of G.players[pid].hand){
-          const s = cardTrickScore(c, G.trick, G.ledSuit);
-          if(s>maxThreat) maxThreat = s;
-        }
-      }
-      const nonSpecial = candidateMoves.filter(c=>c!==G.mighty && c!==JOKER);
-      const concedeCard = (nonSpecial.length? nonSpecial : candidateMoves).slice().sort((a,b)=>aiCardWeight(a)-aiCardWeight(b))[0];
-      if(maxThreat <= currentBestScore){
-        // 위협 자체가 없다: 마이티/조커는 절대 낭비하지 않는다.
-        if(jokerRunningOutOfTime() && candidateMoves.includes(JOKER)) return JOKER;
-        return concedeCard;
-      }
-      const sorted = candidateMoves.slice().sort((a,b)=>aiCardWeight(a)-aiCardWeight(b));
-      const sufficient = sorted.filter(c=>cardTrickScore(c, G.trick, G.ledSuit) > maxThreat);
-      const defendCard = sufficient.length ? sufficient[0] : sorted[0];
-      if(defendCard!==G.mighty && defendCard!==JOKER){
-        // 위협을 넘기는 데 마이티/조커가 필요 없다면 고민할 것 없이 그냥 방어한다.
-        return defendCard;
-      }
-      if(defendCard===concedeCard){
-        // 마이티/조커 말고는 낼 카드가 없다면 아낄 방법이 없으므로 그대로 방어한다.
-        return defendCard;
-      }
-      // 진짜 "위기 상황"인지 시뮬레이션으로 판단: 지금 마이티/조커로 막았을 때와
-      // 그냥 트릭을 내줬을 때 각각의 우리 팀 최종 점수패 획득량을 비교한다.
-      const ROLLOUTS_CRISIS = 6;
-      let defendSum=0, concedeSum=0;
-      for(let i=0;i<ROLLOUTS_CRISIS;i++){
-        defendSum += simRolloutScore(playerId, defendCard);
-        concedeSum += simRolloutScore(playerId, concedeCard);
-      }
-      if(defendSum > concedeSum + 1e-9) return defendCard;
-      if(jokerRunningOutOfTime() && candidateMoves.includes(JOKER)) return JOKER;
-      return concedeCard;
-    }
-  }
-  const ROLLOUTS = 5;
-  let bestCard = candidateMoves[0], bestScore = -Infinity;
+  const ROLLOUTS = 24;
+  let bestCard = candidateMoves[0], bestWinRate = -Infinity;
   for(const card of candidateMoves){
-    let sum=0;
-    for(let i=0;i<ROLLOUTS;i++) sum += simRolloutScore(playerId, card);
-    const avg = sum/ROLLOUTS;
-    if(avg > bestScore + 1e-9){ bestScore = avg; bestCard = card; }
+    let wins=0;
+    for(let i=0;i<ROLLOUTS;i++) wins += simRolloutWin(playerId, card);
+    const rate = wins/ROLLOUTS;
+    if(rate > bestWinRate + 1e-9){ bestWinRate = rate; bestCard = card; }
   }
   return bestCard;
 }

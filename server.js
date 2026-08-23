@@ -30,8 +30,16 @@ function makeRoomCode() {
   return code;
 }
 
+// 플레이어별 재접속 토큰 (다른 화면에 잠깐 나갔다 와도 같은 자리로 돌아올 수 있게 해줌)
+function makeToken() {
+  return Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2);
+}
+
+// 연결이 끊긴 뒤 완전히 방을 나간 것으로 처리하기까지 기다려주는 유예 시간
+const RECONNECT_GRACE_MS = 45000;
+
 function publicPlayers(room) {
-  return room.players.map((p) => ({ id: p.id, name: p.name, host: p.host }));
+  return room.players.map((p) => ({ id: p.id, name: p.name, host: p.host, connected: p.connected !== false }));
 }
 
 function broadcastLobby(room) {
@@ -68,6 +76,40 @@ wss.on("connection", (ws) => {
       const nickname = String(m.nickname || "플레이어").slice(0, 12) || "플레이어";
       // 방 코드는 숫자만 허용한다 (참여자가 잘못된 문자를 섞어 입력해도 무시)
       let roomCode = String(m.room || "").replace(/\D/g, "").trim();
+      const token = typeof m.token === "string" && m.token ? m.token : null;
+
+      // 재접속: 토큰을 가지고 있고, 그 방에 같은 토큰을 쓰던(연결이 끊겼던) 자리가 남아있으면
+      // 새 자리를 만들지 않고 원래 자리를 그대로 이어받는다.
+      if (roomCode && token && rooms.has(roomCode)) {
+        const existingRoom = rooms.get(roomCode);
+        const existingPlayer = existingRoom.players.find((p) => p.token === token);
+        if (existingPlayer) {
+          if (existingPlayer.leaveTimer) {
+            clearTimeout(existingPlayer.leaveTimer);
+            existingPlayer.leaveTimer = null;
+          }
+          existingPlayer.ws = ws;
+          existingPlayer.connected = true;
+          if (nickname) existingPlayer.name = nickname;
+          joined = { roomCode, playerId: existingPlayer.id };
+
+          send(ws, {
+            type: "welcome",
+            playerId: existingPlayer.id,
+            host: existingPlayer.host,
+            room: roomCode,
+            token: existingPlayer.token,
+            players: publicPlayers(existingRoom),
+            resumed: true,
+          });
+          broadcastLobby(existingRoom);
+          for (const p of existingRoom.players) {
+            if (p.id !== existingPlayer.id) send(p.ws, { type: "peer_back", name: existingPlayer.name });
+          }
+          return;
+        }
+        // 토큰과 일치하는 자리가 없다면(유예 시간이 지나 이미 완전히 나간 상태) 아래의 일반 입장 로직으로 진행한다.
+      }
 
       let room;
       if (roomCode) {
@@ -81,7 +123,8 @@ wss.on("connection", (ws) => {
           return;
         }
         room = rooms.get(roomCode);
-        if (room.players.length >= 5) {
+        const activeCount = room.players.filter((p) => p.connected !== false).length;
+        if (activeCount >= 5) {
           send(ws, { type: "error", message: "방이 가득 찼습니다 (최대 5명)." });
           return;
         }
@@ -94,7 +137,15 @@ wss.on("connection", (ws) => {
 
       const isHost = room.players.length === 0;
       const playerId = room.nextId++;
-      const playerObj = { id: playerId, ws, name: nickname, host: isHost };
+      const playerObj = {
+        id: playerId,
+        ws,
+        name: nickname,
+        host: isHost,
+        token: token || makeToken(),
+        connected: true,
+        leaveTimer: null,
+      };
       room.players.push(playerObj);
       joined = { roomCode, playerId };
 
@@ -103,6 +154,7 @@ wss.on("connection", (ws) => {
         playerId,
         host: isHost,
         room: roomCode,
+        token: playerObj.token,
         players: publicPlayers(room),
       });
       broadcastLobby(room);
@@ -136,32 +188,48 @@ wss.on("connection", (ws) => {
     const room = rooms.get(joined.roomCode);
     if (!room) return;
 
-    const leavingIdx = room.players.findIndex((p) => p.id === joined.playerId);
-    if (leavingIdx === -1) return;
-    const leaving = room.players[leavingIdx];
-    room.players.splice(leavingIdx, 1);
+    const player = room.players.find((p) => p.id === joined.playerId);
+    if (!player) return;
+    // 이미 같은 자리에 재접속(새 ws)이 붙어있다면, 지금 닫히는 건 옛날 연결이므로 무시한다.
+    if (player.ws !== ws) return;
 
-    if (room.players.length === 0) {
-      rooms.delete(joined.roomCode);
-      return;
-    }
-
-    // 방장이 나갔다면 남은 사람 중 가장 먼저 들어온 사람을 새 방장으로 승격
-    if (leaving.host) {
-      room.players[0].host = true;
-      send(room.players[0].ws, {
-        type: "welcome",
-        playerId: room.players[0].id,
-        host: true,
-        room: room.code,
-        players: publicPlayers(room),
-      });
-    }
-
-    for (const p of room.players) {
-      send(p.ws, { type: "peer_left", name: leaving.name });
-    }
+    player.connected = false;
     broadcastLobby(room);
+    for (const p of room.players) {
+      if (p.id !== player.id) send(p.ws, { type: "peer_away", name: player.name });
+    }
+
+    // 유예 시간 안에 재접속하지 않으면 그때 완전히 방을 나간 것으로 처리한다.
+    player.leaveTimer = setTimeout(() => {
+      const idx = room.players.findIndex((p) => p.id === player.id);
+      if (idx === -1) return;
+      const leaving = room.players[idx];
+      if (leaving.connected) return; // 그 사이에 재접속했다면 제거하지 않는다
+      room.players.splice(idx, 1);
+
+      if (room.players.length === 0) {
+        rooms.delete(joined.roomCode);
+        return;
+      }
+
+      // 방장이 끝내 돌아오지 않았다면 남은 사람 중 가장 먼저 들어온 사람을 새 방장으로 승격
+      if (leaving.host) {
+        room.players[0].host = true;
+        send(room.players[0].ws, {
+          type: "welcome",
+          playerId: room.players[0].id,
+          host: true,
+          room: room.code,
+          token: room.players[0].token,
+          players: publicPlayers(room),
+        });
+      }
+
+      for (const p of room.players) {
+        send(p.ws, { type: "peer_left", name: leaving.name });
+      }
+      broadcastLobby(room);
+    }, RECONNECT_GRACE_MS);
   });
 });
 

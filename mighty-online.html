@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.210 -->
+<!-- MIGHTY (마이티) - v0.214 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -222,6 +222,12 @@
     transition:transform .15s ease, box-shadow .15s ease, margin .15s ease;
     user-select:none;
     overflow:hidden;
+    /* iOS Safari(WebKit)에서 border-radius + 그라데이션 배경 + overflow:hidden 조합이
+       transform 애니메이션과 만나면 모서리 부근에 얇은 가로줄(seam)이 보이는 렌더링 버그가 있다.
+       -webkit-mask-image로 강제로 다시 클리핑시키고, 별도 레이어로 승격해 이음선을 없앤다. */
+    -webkit-mask-image:-webkit-radial-gradient(white, black);
+    -webkit-backface-visibility:hidden;
+    -webkit-transform:translateZ(0);
   }
   .card:first-child{margin-left:0;}
   /* 절대 위치로 고정: 폰트 크기가 환경에 따라 조금 달라져도 모서리 밖으로 밀려나지 않음 */
@@ -253,6 +259,16 @@
     position:absolute; bottom:2px; left:2px;
     width:14px;height:14px; border-radius:50%;
     background:var(--gold-bright); color:#3a2a0a;
+    font-size:9px; font-weight:900; line-height:14px; text-align:center;
+    box-shadow:0 1px 3px #00000070; z-index:2;
+  }
+  /* 조커콜(리퍼) 카드 표시: 마이티(M)와 같은 자리(좌측 하단)에 표시되지만, 조커콜 카드는
+     항상 특정 3(클로버3 또는 스페이드3)이라 마이티와 같은 카드가 될 수 없어 겹치지 않는다. */
+  .card.is-jokercall::after{
+    content:"G";
+    position:absolute; bottom:2px; left:2px;
+    width:14px;height:14px; border-radius:50%;
+    background:#7fd3ff; color:#0a2a3a;
     font-size:9px; font-weight:900; line-height:14px; text-align:center;
     box-shadow:0 1px 3px #00000070; z-index:2;
   }
@@ -441,7 +457,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.210</span><span>MIGHTY CARD GAME</span></div>
+    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.214</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -841,10 +857,24 @@ function handleOnlineAction(action, pid){
     const card = action.card;
     playCard(pid, card, true);
     if(wasLead && card===JOKER && G.trickNum>1 && G.trickNum<10){
+      if(G.players[pid].isHuman){
+        // 실제 사람(원격 게스트)이 조커로 리드했다면, host가 AI로 무늬를 대신 정해버리지 않고
+        // 그 사람이 직접 고를 때까지 기다린다. playCard()가 이미 render()→broadcast를 했으니
+        // 게스트 화면에는 방금 낸 조커가 반영돼 있고, 게스트 쪽 openJokerLeadSuitPicker에서
+        // 고른 무늬는 "jokerLeadSuit" 액션으로 되돌아온다(아래 분기). 그때까지는 다음 턴으로
+        // 넘어가지 않는다(scheduleTurn()을 호출하지 않음).
+        return;
+      }
       const suit = aiChooseJokerCallSuit(pid);
       G.ledSuit = suit;
       logMsg(`🃏 ${G.players[pid].name}의 조커 선언: 이번 트릭은 ${SUIT_NAME[suit]} 기준으로 진행됩니다.`);
     }
+    scheduleTurn();
+  }
+  else if(action.type==="jokerLeadSuit" && G.phase==="play" && G.trick.length===1 && G.trick[0].card===JOKER && G.trick[0].playerId===pid && G.ledSuit===null){
+    // 원격 게스트가 조커 리드 후 직접 고른 기준 무늬가 도착했을 때 반영하고, 그제서야 다음 턴을 진행한다.
+    G.ledSuit = action.suit;
+    logMsg(`🃏 ${G.players[pid].name}의 조커 선언: 이번 트릭은 ${SUIT_NAME[action.suit]} 기준으로 진행됩니다.`);
     scheduleTurn();
   }
   else if(action.type==="exchange" && G.phase==="exchange" && G.declarer===pid) doExchange(action.cards, true);
@@ -928,6 +958,7 @@ function connectOnline(nickname, roomCode, token, silentReconnect){
         G = deserializeG(m.state.G);
         Object.assign(matchState, m.state.matchState||{});
         online.deadline = m.state.deadline||0;
+        if(G.result) applyMyPerspective(G.result); // host가 보낸 myTeam/myWin(host 자신의 시점)을 내 시점 값으로 덮어쓴다
         guestPlaySfxForStateDiff(prevG, G);
         render();
         // guest는 로컬 타이머/AI 실행 없이 화면만 최신 상태로 맞춘다. 다음 턴 진행은 host의 broadcast가 담당한다.
@@ -1024,6 +1055,7 @@ function guestMaybePromptTurn(){
     // 판별해서, 같은 결과를 중복으로 다시 열어 애니메이션/모달을 리셋하지 않도록 한다.
     if(guestLastResultSeq !== matchState.resultSeq){
       guestLastResultSeq = matchState.resultSeq;
+      applyRoundResultToLocalProfile(); // 게스트 자신의 로컬 프로필(레벨/XP)에 이번 판 결과를 반영
       renderResultUI();
     }
   } else {
@@ -1252,6 +1284,42 @@ function showProfileBackupUI(){
 }
 function xpToNextLevel(level){ return 100 + (level-1)*35; }
 function levelProgressPercent(level, xp){ return Math.max(0, Math.min(100, (xp/xpToNextLevel(level))*100)); }
+
+// 이 판에서 "나"(이 기기의 시점)의 팀/승패를 로컬에서 다시 계산해 G.result에 채워 넣는다.
+// declarerTeam/success(주공팀이 이겼는지)는 시점과 무관한 값이라 그대로 방송되지만,
+// myTeam/myWin은 "누가 보고 있느냐"에 따라 달라지므로 host가 계산해 방송한 값을 그대로 쓰면
+// 안 된다 (예전에는 항상 0번 자리 기준으로 계산해서, 다른 자리에 앉은 게스트에게는
+// 자기 자신이 아니라 엉뚱한 사람의 승패/레벨이 표시되는 버그가 있었다).
+function applyMyPerspective(r){
+  if(!r) return;
+  r.myTeam = teamOf(meId());
+  r.myWin = (r.myTeam==="declarer") ? r.success : !r.success;
+}
+// 이번 판 결과(G.result)를 "이 기기"의 로컬 프로필(누적 전적/레벨/XP)에 반영한다.
+// 온라인 모드에서는 host와 각 게스트가 각자 자기 기기에서 이 함수를 한 번씩 호출해서,
+// XP/레벨이 host의 진행 상황이 아니라 각자 자신의 진행 상황으로 계산되도록 한다.
+// matchState.resultSeq를 기준으로 라운드당 한 번만 반영되도록 막는다(중복 방송/재렌더 방지).
+let xpAppliedForSeq = -1;
+function applyRoundResultToLocalProfile(){
+  if(!G || !G.result) return;
+  const seq = matchState.resultSeq||0;
+  if(xpAppliedForSeq===seq) return;
+  xpAppliedForSeq = seq;
+  applyMyPerspective(G.result);
+  const r = G.result;
+  profile.totalGames += 1;
+  if(r.myWin) profile.totalWins += 1;
+  const {xp:xpGain, breakdown:xpBreakdown} = computeXpGain(r);
+  const {startLevel, startXp, levelUps, levelDowns} = applyXpGain(xpGain);
+  r.xpGain = xpGain;
+  r.xpBreakdown = xpBreakdown;
+  r.xpStartLevel = startLevel;
+  r.xpStartXp = startXp;
+  r.xpLevelUps = levelUps;
+  r.xpLevelDowns = levelDowns;
+  r.streak = profile.currentStreak;
+  saveProfile();
+}
 
 function computeXpGain(r){
   const breakdown = [];
@@ -1975,13 +2043,31 @@ function simRolloutWin(playerId, card){
 function aiChooseCardOmniscient(playerId, moves){
   if(!moves || moves.length===0) return null; // 방어: 낼 수 있는 카드가 없으면 절대 undefined를 반환하지 않는다
   if(moves.length===1) return moves[0];
+  let candidateMoves = moves;
   // 첫 트릭에서는 조커가 항상 최하위로 무조건 진다(jokerTrickScore 참고).
   // 리드든 팔로우(버리는 카드)든, 다른 낼 카드가 있다면 가급적 조커를 첫 트릭에 내지 않는다.
-  let candidateMoves = moves;
   if(G.trickNum===1 && moves.includes(JOKER)){
     const noJoker = moves.filter(c=>c!==JOKER);
     if(noJoker.length>0) candidateMoves = noJoker;
   }
+  // 조커콜(리퍼)을 리드로 낼 때, 우리 팀 조커를 스스로 무력화시키는 자충수는 피한다.
+  // 상대 실제 손패는 몰라도 되고, 오직 "공개된 정보"만으로 판단한다:
+  //  - 내 손에 조커가 있다 (자기 자신의 패이므로 당연히 아는 정보)
+  //  - 또는 프렌드 카드가 조커로 지목되어 있다 (공개 선언이므로, 조커는 규칙상 항상 우리 팀에 있음이 보장됨)
+  if(G.trick.length===0){
+    const jc = jokerCallCard();
+    if(jc && candidateMoves.includes(jc)){
+      const iHoldJoker = G.players[playerId].hand.includes(JOKER);
+      const jokerGuaranteedOwnTeam = (G.friendCard===JOKER);
+      if(iHoldJoker || jokerGuaranteedOwnTeam){
+        const noCall = candidateMoves.filter(c=>c!==jc);
+        if(noCall.length>0) candidateMoves = noCall;
+      }
+    }
+  }
+  // 8~9트릭까지 조커를 계속 쥐고 있으면 마지막(10) 트릭에 갇혀 무조건 지는 카드가 되어버린다.
+  // 이건 상대 패를 몰라도 트릭 번호만으로 알 수 있는 규칙상 사실이므로, 이때는 지금 확실히 처리한다.
+  if(jokerRunningOutOfTime() && candidateMoves.includes(JOKER)) return JOKER;
   const ROLLOUTS = 24;
   let bestCard = candidateMoves[0], bestWinRate = -Infinity;
   for(const card of candidateMoves){
@@ -2087,32 +2173,18 @@ function finishGame(){
   }
 
   G.phase="result";
-  const myTeam = teamOf(0);
-  const myWin = (myTeam==="declarer") ? win : !win;
-  G.result = {teamPts, oppPts, success:win, myWin, myTeam, declarerTeam:[...declarerTeam], base, unit, margin, isNoTrump, isRun, isBaekRun, deltas, target};
-
-  profile.totalGames += 1;
-  if(myWin) profile.totalWins += 1;
-  const {xp:xpGain, breakdown:xpBreakdown} = computeXpGain(G.result);
-  const {startLevel, startXp, levelUps, levelDowns} = applyXpGain(xpGain);
-  G.result.xpGain = xpGain;
-  G.result.xpBreakdown = xpBreakdown;
-  G.result.xpStartLevel = startLevel;
-  G.result.xpStartXp = startXp;
-  G.result.xpLevelUps = levelUps;
-  G.result.xpLevelDowns = levelDowns;
-  G.result.streak = profile.currentStreak;
-  saveProfile();
+  G.result = {teamPts, oppPts, success:win, declarerTeam:[...declarerTeam], base, unit, margin, isNoTrump, isRun, isBaekRun, deltas, target};
 
   matchState.nextDealer = (G.dealer+1)%5;
   matchState.resultSeq = (matchState.resultSeq||0) + 1;
+  applyRoundResultToLocalProfile(); // host 자신의 이번 판 결과를 host 자신의 로컬 프로필(레벨/XP)에 반영
   matchState.history.push({
     round: matchState.currentRound,
     declarer: G.players[G.declarer].name,
     giruda: G.giruda, count: G.bidCount,
     solo: G.solo,
     friend: (!G.solo && G.friendPlayerId!==null)? G.players[G.friendPlayerId].name : null,
-    teamPts, oppPts, success:win, myWin,
+    teamPts, oppPts, success:win, myWin: G.result.myWin,
     teamNames: declarerTeam.size? [...declarerTeam].map(id=>G.players[id].name) : [],
     deltas: {...deltas},
     scoresAfter: matchState.scores.slice()
@@ -2287,10 +2359,12 @@ function buildCardEl(card, mini){
     const s = SUIT_SYM[suitOf(card)], r = RANK_LABEL[rankOf(card)];
     el.innerHTML = `<div class="r">${r}<br>${s}</div><div class="s">${s}</div><div class="r bottom">${r}<br>${s}</div>`;
   }
-  // 마이티/기루다 표시: 누구의 카드든, 손패든 트릭에 깔린 카드든 항상 동일하게 표시
+  // 마이티/기루다/조커콜 표시: 누구의 카드든, 손패든 트릭에 깔린 카드든 항상 동일하게 표시
   if(G){
     if(G.mighty && card===G.mighty) el.classList.add("is-mighty");
     if(G.giruda && card!==JOKER && suitOf(card)===G.giruda) el.classList.add("is-giruda");
+    // 조커콜은 기루다가 정해진 뒤(G.mighty가 정해진 시점)부터, 조커가 아직 나오지 않았을 때만 유효하다
+    if(G.mighty && !jokerAlreadyPlayed() && card===jokerCallCard()) el.classList.add("is-jokercall");
   }
   return el;
 }
@@ -2361,8 +2435,15 @@ function openJokerLeadSuitPicker(onDone){
   document.querySelectorAll("#jokerSuitRow .suit-opt").forEach(el=>{
     el.onclick = ()=>{
       const suit = el.dataset.suit;
-      G.ledSuit = suit;
-      logMsg(`🃏 조커 선언: 이번 트릭은 ${SUIT_NAME[suit]} 기준으로 진행됩니다.`);
+      if(onlineEnabled() && !online.host){
+        // 게스트는 직접 G.ledSuit를 바꾸지 않는다(어차피 다음 broadcast로 덮어써진다).
+        // 대신 고른 무늬를 host에게 액션으로 보내고, host가 반영해 다시 broadcast하면
+        // 그 결과가 화면에 반영된다.
+        onlineSend({type:"action", action:{type:"jokerLeadSuit", suit}, playerId:meId()});
+      } else {
+        G.ledSuit = suit;
+        logMsg(`🃏 조커 선언: 이번 트릭은 ${SUIT_NAME[suit]} 기준으로 진행됩니다.`);
+      }
       closeModal();
       onDone();
     };
@@ -2641,11 +2722,21 @@ function renderXpModal(onDone){
 }
 
 function renderMatchSummaryUI(){
+  // h.myWin은 그 판을 계산한 host 자신의 시점 값이라, 게스트가 그대로 쓰면
+  // 내가 아니라 host의 승패가 표시되는 문제가 있다. 라운드마다 저장해둔
+  // teamNames/declarer(이름 목록)로 "내 이름"이 그 판의 주공팀에 있었는지를
+  // 이 기기에서 다시 계산해서 보여준다.
+  const myName = G.players[meId()].name;
   const rows = matchState.history.map(h=>{
     const teamStr = h.solo? `${h.declarer}(솔로)` : (h.teamNames? h.teamNames.join(", ") : h.declarer);
-    return `<tr><td>${h.round}</td><td>${teamStr}</td><td>${suitBadge(h.giruda)}${h.count}</td><td>${h.teamPts}:${h.oppPts}</td><td>${h.myWin?'✅ 승리':'❌ 패배'}</td></tr>`;
+    const myWasDeclarerTeam = h.solo ? (h.declarer===myName) : (h.teamNames && h.teamNames.includes(myName));
+    const myWinRow = myWasDeclarerTeam ? h.success : !h.success;
+    return `<tr><td>${h.round}</td><td>${teamStr}</td><td>${suitBadge(h.giruda)}${h.count}</td><td>${h.teamPts}:${h.oppPts}</td><td>${myWinRow?'✅ 승리':'❌ 패배'}</td></tr>`;
   }).join("");
-  const myWins = matchState.history.filter(h=>h.myWin).length;
+  const myWins = matchState.history.filter(h=>{
+    const myWasDeclarerTeam = h.solo ? (h.declarer===myName) : (h.teamNames && h.teamNames.includes(myName));
+    return myWasDeclarerTeam ? h.success : !h.success;
+  }).length;
   const finalScoreRows = G.players.map(p=>`<tr><td>${p.name}</td><td>${matchState.scores[p.id]}점</td></tr>`).join("");
   const maxScore = Math.max(...matchState.scores);
   const winners = G.players.filter(p=>matchState.scores[p.id]===maxScore).map(p=>p.name).join(", ");

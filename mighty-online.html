@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.208 -->
+<!-- MIGHTY (마이티) - v0.209 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -441,7 +441,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.208</span><span>MIGHTY CARD GAME</span></div>
+    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.209</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -850,6 +850,26 @@ function handleOnlineAction(action, pid){
   else if(action.type==="exchange" && G.phase==="exchange" && G.declarer===pid) doExchange(action.cards, true);
   else if(action.type==="friend" && G.phase==="friend" && G.declarer===pid) applyFriend(action.choice, true);
 }
+// 게스트는 카드 진행/트릭 판정을 직접 실행하지 않고 host가 보낸 state 브로드캐스트를
+// 받아 화면만 갱신하기 때문에, 기존에는 sfxPlay()를 거치는 코드 경로 자체를 타지 않아
+// 온라인 모드(게스트 시점)에서는 효과음이 전혀 나지 않았다. 이전/이후 상태를 비교해서
+// 카드 낸 소리·트릭 승리 소리·판 승패 소리를 게스트 쪽에서도 재현해준다.
+function guestPlaySfxForStateDiff(prevG, newG){
+  try{
+    if(!prevG || !newG) return;
+    if(newG.phase==="result" && prevG.phase!=="result" && newG.result){
+      sfxPlay(newG.result.myWin ? "win" : "lose");
+      return;
+    }
+    if(prevG.phase==="play" && newG.phase==="play"){
+      if(newG.trickNum>prevG.trickNum){
+        sfxPlay("trick"); // 트릭이 완료되며 다음 트릭으로 넘어감
+      } else if(newG.trickNum===prevG.trickNum && (newG.trick||[]).length>(prevG.trick||[]).length){
+        sfxPlay("card"); // 같은 트릭 안에서 카드가 추가로 나감
+      }
+    }
+  }catch(e){ /* 무시 */ }
+}
 function connectOnline(nickname, roomCode, token, silentReconnect){
   onlineDisconnect(true);
   online.nickname = nickname;
@@ -904,9 +924,11 @@ function connectOnline(nickname, roomCode, token, silentReconnect){
                                // (그렇지 않으면 render()→broadcast→자기 자신 수신→render()→broadcast… 로 무한 루프가 돌면서 화면이 계속 깜박인다)
       if(m.state && m.state.G){
         const wasNoGame = !G;
+        const prevG = G;
         G = deserializeG(m.state.G);
         Object.assign(matchState, m.state.matchState||{});
         online.deadline = m.state.deadline||0;
+        guestPlaySfxForStateDiff(prevG, G);
         render();
         // guest는 로컬 타이머/AI 실행 없이 화면만 최신 상태로 맞춘다. 다음 턴 진행은 host의 broadcast가 담당한다.
         // 다만, "내 차례"로 바뀐 배팅/카드교환/프렌드 지목 화면은 host의 scheduleXXX()가 아니라
@@ -917,8 +939,8 @@ function connectOnline(nickname, roomCode, token, silentReconnect){
       online.deadline = m.deadline||0; onlineRenderTimer();
     } else if(m.type==="peer_away"){
       const nm = m.name||"플레이어";
-      logMsgSafe(`⏸️ ${escHtml(nm)}님의 연결이 잠시 끊겼습니다. 돌아올 때까지 AI가 대신 진행합니다.`);
-      showToast(`⏸️ ${nm}님이 잠깐 자리를 비웠어요. AI가 대신 진행합니다.`);
+      logMsgSafe(`⏸️ ${escHtml(nm)}님의 연결이 잠시 끊겼습니다. 10초 안에 돌아오지 않으면 게임이 종료됩니다.`);
+      showToast(`⏸️ ${nm}님이 잠깐 끊겼어요. 10초 내로 재접속하지 않으면 게임이 종료됩니다.`);
     } else if(m.type==="peer_back"){
       const nm = m.name||"플레이어";
       logMsgSafe(`▶️ ${escHtml(nm)}님이 다시 접속했습니다.`);
@@ -928,6 +950,11 @@ function connectOnline(nickname, roomCode, token, silentReconnect){
       const nm = m.name||"플레이어";
       logMsgSafe(`⚠️ ${escHtml(nm)}님이 방을 나갔습니다. 해당 자리는 AI가 대신합니다.`);
       showToast(`⚠️ ${nm}님의 접속이 끊겼습니다. 해당 자리는 AI가 대신 진행합니다.`);
+    } else if(m.type==="room_closed"){
+      const nm = m.name||"플레이어";
+      alert(`⚠️ ${nm}님이 10초 안에 다시 접속하지 못해 게임이 종료되었습니다.`);
+      onlineDisconnect();
+      showRoundSetup();
     } else if(m.type==="error"){
       alert(m.message||"온라인 오류가 발생했습니다."); onlineDisconnect();
     }

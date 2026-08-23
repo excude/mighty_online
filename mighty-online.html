@@ -704,7 +704,9 @@ function sortHand(hand, giruda, mighty){
 // ⚠️ Render에 서버를 배포한 뒤, 아래 주소를 실제 서비스 주소로 바꿔주세요. (예: wss://mighty-online.onrender.com)
 const ONLINE_SERVER_URL = "wss://mighty-online-6svd.onrender.com";
 const ONLINE_LIMIT_MS = 20000;
-const online = {ws:null, connected:false, host:false, room:"", playerId:null, nickname:"", players:[], deadline:0, timerHandle:null, uiTimerHandle:null, starting:false};
+const online = {ws:null, connected:false, host:false, room:"", playerId:null, nickname:"", token:"", players:[], deadline:0, timerHandle:null, uiTimerHandle:null, starting:false};
+let onlineReconnectAttempt = 0;
+let onlineReconnectTimer = null;
 // 온라인 방장이 로비에서 고르는 매치 설정(시작 점수/종료 방식/판 수). 로비가 재렌더링(인원 변경 등)되어도
 // 방장이 고른 값이 초기화되지 않도록 모듈 스코프에 별도로 보관해둔다.
 const onlineLobbySettings = {startScore:50, endMode:"rounds", totalRounds:1};
@@ -727,12 +729,15 @@ function onlineUrl(){
 }
 function onlineSend(o){ if(onlineEnabled()) online.ws.send(JSON.stringify(o)); }
 function onlineDisconnect(silent){
+  if(onlineReconnectTimer){ clearTimeout(onlineReconnectTimer); onlineReconnectTimer=null; }
+  onlineReconnectAttempt = 0;
   if(online.timerHandle) clearInterval(online.timerHandle); online.timerHandle=null;
   if(online.ws){ try{ online.ws.onclose=null; online.ws.close(); }catch(e){} }
-  online.ws=null; online.connected=false; online.host=false; online.playerId=null; online.players=[]; online.room="";
+  online.ws=null; online.connected=false; online.host=false; online.playerId=null; online.players=[]; online.room=""; online.token="";
   if(online.uiTimerHandle) clearInterval(online.uiTimerHandle); online.uiTimerHandle=null;
   const el = document.getElementById("onlineTimer");
   if(el) el.style.display="none";
+  if(!silent){ try{ localStorage.removeItem("mighty_online_room"); localStorage.removeItem("mighty_online_token"); }catch(e){} }
 }
 // host만 타이머를 발급/집행한다: 제한시간 안에 행동이 없으면 host가 대신 패스/AI행동을 실행해 게임이 멈추지 않게 한다.
 function onlineArmTimer(pid, phase){
@@ -803,32 +808,48 @@ function handleOnlineAction(action, pid){
   else if(action.type==="exchange" && G.phase==="exchange" && G.declarer===pid) doExchange(action.cards, true);
   else if(action.type==="friend" && G.phase==="friend" && G.declarer===pid) applyFriend(action.choice, true);
 }
-function connectOnline(nickname, roomCode){
+function connectOnline(nickname, roomCode, token, silentReconnect){
   onlineDisconnect(true);
   online.nickname = nickname;
   try{ localStorage.setItem("mighty_online_nickname", nickname); }catch(e){}
   const url = onlineUrl();
   let ws;
-  try{ ws = new WebSocket(url); }catch(e){ alert("온라인 서버 주소가 올바르지 않습니다: "+url); return; }
+  try{ ws = new WebSocket(url); }catch(e){ if(!silentReconnect) alert("온라인 서버 주소가 올바르지 않습니다: "+url); return; }
   online.ws = ws;
   if(online.uiTimerHandle) clearInterval(online.uiTimerHandle);
   online.uiTimerHandle = setInterval(onlineRenderTimer, 250);
-  openModal(`<h2>연결 중…</h2><p class="sub">${escHtml(url)} 에 접속하고 있습니다.</p>`);
+  if(!silentReconnect) openModal(`<h2>연결 중…</h2><p class="sub">${escHtml(url)} 에 접속하고 있습니다.</p>`);
   const connectTimeout = setTimeout(()=>{
     if(!online.connected){
-      alert("서버에 연결하지 못했습니다.\n주소: "+url+"\n\n· 주소가 wss:// 로 시작하는지\n· Render 서비스가 배포/실행 중인지(무료 플랜은 첫 접속 시 수십 초 걸릴 수 있음)\n· server.js가 \"/ws\" 경로로 웹소켓을 열고 있는지\n확인해주세요.");
-      onlineDisconnect();
-      showRoundSetup();
+      if(silentReconnect){
+        scheduleOnlineReconnect();
+      } else {
+        alert("서버에 연결하지 못했습니다.\n주소: "+url+"\n\n· 주소가 wss:// 로 시작하는지\n· Render 서비스가 배포/실행 중인지(무료 플랜은 첫 접속 시 수십 초 걸릴 수 있음)\n· server.js가 \"/ws\" 경로로 웹소켓을 열고 있는지\n확인해주세요.");
+        onlineDisconnect();
+        showRoundSetup();
+      }
     }
   }, 8000);
-  ws.onopen = ()=> ws.send(JSON.stringify({type:"join", nickname, room:(roomCode||"").toUpperCase()}));
+  ws.onopen = ()=> ws.send(JSON.stringify({type:"join", nickname, room:(roomCode||"").replace(/\D/g,""), token: token||undefined}));
   ws.onmessage = (ev)=>{
     let m; try{ m = JSON.parse(ev.data); }catch(e){ return; }
     if(m.type==="welcome"){
       clearTimeout(connectTimeout);
+      onlineReconnectAttempt = 0;
+      const wasMidGame = !!G;
       online.connected=true; online.playerId=m.playerId; online.host=!!m.host; online.room=m.room; online.players=m.players||[];
-      try{ localStorage.setItem("mighty_online_room", online.room); }catch(e){}
-      renderOnlineLobby();
+      if(m.token) online.token=m.token;
+      try{ localStorage.setItem("mighty_online_room", online.room); localStorage.setItem("mighty_online_token", online.token||""); }catch(e){}
+      if(silentReconnect && wasMidGame){
+        // 게임 도중 재접속: 로비로 돌리지 않고 하던 게임을 그대로 이어서 보여준다.
+        closeOnlineModals();
+        showToast("✅ 다시 연결되었습니다.", "info");
+        if(online.host) broadcastOnlineState(); // 방장이면 끊긴 동안 놓쳤을 최신 상태를 다시 뿌려준다
+        render();
+        guestMaybePromptTurn();
+      } else {
+        renderOnlineLobby();
+      }
     } else if(m.type==="lobby"){
       online.players = m.players||[];
       const me = online.players.find(p=>p.id===online.playerId);
@@ -852,6 +873,15 @@ function connectOnline(nickname, roomCode){
       }
     } else if(m.type==="timer"){
       online.deadline = m.deadline||0; onlineRenderTimer();
+    } else if(m.type==="peer_away"){
+      const nm = m.name||"플레이어";
+      logMsgSafe(`⏸️ ${escHtml(nm)}님의 연결이 잠시 끊겼습니다. 돌아올 때까지 AI가 대신 진행합니다.`);
+      showToast(`⏸️ ${nm}님이 잠깐 자리를 비웠어요. AI가 대신 진행합니다.`);
+    } else if(m.type==="peer_back"){
+      const nm = m.name||"플레이어";
+      logMsgSafe(`▶️ ${escHtml(nm)}님이 다시 접속했습니다.`);
+      showToast(`▶️ ${nm}님이 다시 접속했습니다!`, "info");
+      if(online.host) broadcastOnlineState();
     } else if(m.type==="peer_left"){
       const nm = m.name||"플레이어";
       logMsgSafe(`⚠️ ${escHtml(nm)}님이 방을 나갔습니다. 해당 자리는 AI가 대신합니다.`);
@@ -865,9 +895,31 @@ function connectOnline(nickname, roomCode){
     const was = online.connected;
     online.connected=false; online.ws=null;
     const el = document.getElementById("onlineTimer"); if(el) el.style.display="none";
-    if(was) alert("온라인 방 연결이 종료되었습니다.");
+    if(was) scheduleOnlineReconnect();
   };
   ws.onerror = (e)=>{ console.error("온라인 서버 연결 오류", url, e); };
+}
+// 예상치 못하게 연결이 끊겼을 때(다른 화면으로 잠깐 나갔다 오는 등) 자동으로 재접속을 시도한다.
+// 사용자가 직접 "나가기"를 눌렀을 때는 onlineDisconnect()가 ws.onclose를 미리 null로 지워두므로 여기가 실행되지 않는다.
+function scheduleOnlineReconnect(){
+  const room = online.room || (()=>{ try{ return localStorage.getItem("mighty_online_room")||""; }catch(e){ return ""; } })();
+  const token = online.token || (()=>{ try{ return localStorage.getItem("mighty_online_token")||""; }catch(e){ return ""; } })();
+  const nickname = online.nickname || (()=>{ try{ return localStorage.getItem("mighty_online_nickname")||""; }catch(e){ return ""; } })();
+  if(!room || !token || !nickname){ onlineDisconnect(); showRoundSetup(); return; }
+  onlineReconnectAttempt++;
+  if(onlineReconnectAttempt === 1) showToast("⚠️ 연결이 끊겼습니다. 재접속을 시도합니다…");
+  if(onlineReconnectAttempt > 6){
+    onlineReconnectAttempt = 0;
+    alert("온라인 방에 다시 연결하지 못했습니다.");
+    onlineDisconnect();
+    showRoundSetup();
+    return;
+  }
+  if(onlineReconnectTimer) clearTimeout(onlineReconnectTimer);
+  onlineReconnectTimer = setTimeout(()=>{
+    onlineReconnectTimer = null;
+    connectOnline(nickname, room, token, true);
+  }, Math.min(1500*onlineReconnectAttempt, 6000));
 }
 function logMsgSafe(s){ if(G && typeof logMsg==="function") logMsg(s); }
 // 화면 상단에 잠깐 뜨는 알림 배너 (접속 끊김 등). alert()과 달리 게임 흐름을 막지 않는다.
@@ -916,7 +968,7 @@ function closeOnlineModals(){
 }
 function renderOnlineLobby(){
   if(!online.connected) return;
-  const rows = online.players.map(p=>`<div class="online-player-row"><span class="dot"></span><span>${escHtml(p.name)}</span><span style="margin-left:auto;opacity:.55">${p.host?"방장":"플레이어"}</span></div>`).join("");
+  const rows = online.players.map(p=>`<div class="online-player-row"><span class="dot"></span><span>${escHtml(p.name)}${p.connected===false?' <span style="opacity:.6;font-size:12px;">(AI 대행 중)</span>':''}</span><span style="margin-left:auto;opacity:.55">${p.host?"방장":"플레이어"}</span></div>`).join("");
   const presets = [1,3,5,7,9];
   const optHtml = presets.map(n=>`<div class="count-opt" data-n="${n}" style="width:44px;">${n}판</div>`).join("");
   const settingsHtml = online.host ? `
@@ -995,15 +1047,21 @@ function showOnlineEntry(){
     <h2>온라인 플레이</h2>
     <p class="sub">닉네임을 입력하세요. 방 코드를 비우면 새 방을 만듭니다.</p>
     <div class="row"><input id="onlineNick" maxlength="12" value="${escHtml(saved)}" placeholder="닉네임" style="flex:1;padding:10px;border-radius:8px;border:1px solid var(--line);background:#0000002a;color:var(--paper);font-size:14px"></div>
-    <div class="row"><input id="onlineRoom" maxlength="6" placeholder="방 코드 (선택)" style="flex:1;padding:10px;border-radius:8px;border:1px solid var(--line);background:#0000002a;color:var(--paper);font-size:14px;text-transform:uppercase"></div>
+    <div class="row"><input id="onlineRoom" maxlength="6" inputmode="numeric" pattern="[0-9]*" placeholder="방 코드 (숫자, 선택)" style="flex:1;padding:10px;border-radius:8px;border:1px solid var(--line);background:#0000002a;color:var(--paper);font-size:14px;"></div>
     <p class="online-hint">서버: ${escHtml(onlineUrl())}</p>
     <div class="modal-actions"><button class="btn ghost" id="onlineCancel">취소</button><button class="btn" id="onlineJoin">입장</button></div>
   `);
   document.getElementById("onlineCancel").onclick = closeModal;
+  const roomInputEl = document.getElementById("onlineRoom");
+  roomInputEl.addEventListener("input", ()=>{
+    const digitsOnly = roomInputEl.value.replace(/\D/g,"").slice(0,6);
+    if(roomInputEl.value !== digitsOnly) roomInputEl.value = digitsOnly;
+  });
   document.getElementById("onlineJoin").onclick = ()=>{
     const n = document.getElementById("onlineNick").value.trim().slice(0,12);
-    const r = document.getElementById("onlineRoom").value.trim().toUpperCase();
+    const r = document.getElementById("onlineRoom").value.trim().replace(/\D/g,"");
     if(!n){ alert("닉네임을 입력하세요."); return; }
+    if(document.getElementById("onlineRoom").value.trim() && !r){ alert("방 코드는 숫자만 입력할 수 있습니다."); return; }
     closeModal();
     connectOnline(n, r);
   };
@@ -2828,6 +2886,17 @@ function resumeGame(){
 
   // 강제 종료/백그라운드 전환 등 언제 끊겨도 최신 상태가 저장되도록 즉시 플러시
   document.addEventListener("visibilitychange", ()=>{ if(document.hidden) flushSaveNow(); });
+  // 다른 화면(앱/탭)에 나갔다가 돌아왔을 때, 온라인 연결이 끊겨있다면 예약된 대기시간을 기다리지 않고 바로 재접속을 시도한다.
+  document.addEventListener("visibilitychange", ()=>{
+    if(document.hidden) return;
+    if(online.connected || online.ws) return;
+    const room = online.room || (()=>{ try{ return localStorage.getItem("mighty_online_room")||""; }catch(e){ return ""; } })();
+    const token = online.token || (()=>{ try{ return localStorage.getItem("mighty_online_token")||""; }catch(e){ return ""; } })();
+    const nickname = online.nickname || (()=>{ try{ return localStorage.getItem("mighty_online_nickname")||""; }catch(e){ return ""; } })();
+    if(!room || !token || !nickname) return;
+    if(onlineReconnectTimer){ clearTimeout(onlineReconnectTimer); onlineReconnectTimer=null; }
+    connectOnline(nickname, room, token, true);
+  });
   window.addEventListener("pagehide", flushSaveNow);
   window.addEventListener("beforeunload", flushSaveNow);
   window.addEventListener("blur", flushSaveNow);

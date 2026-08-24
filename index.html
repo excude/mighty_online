@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.204 -->
+<!-- MIGHTY (마이티) - v0.223 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -195,6 +195,10 @@
     gap:8px;
   }
   #handInfo>*{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  #myRoleTag{font-size:10px;font-weight:900;border-radius:10px;padding:2px 8px;letter-spacing:.5px;flex-shrink:0;}
+  #myRoleTag:empty{padding:0;}
+  #myRoleTag.declarer{color:#3a2a0a;background:linear-gradient(90deg,#f0cd8a,#d4af6a);}
+  #myRoleTag.friend{color:#04203a;background:#4fa8e8;}
   #hand{
     display:flex;justify-content:center;
     gap:0;
@@ -222,6 +226,12 @@
     transition:transform .15s ease, box-shadow .15s ease, margin .15s ease;
     user-select:none;
     overflow:hidden;
+    /* iOS Safari(WebKit)에서 border-radius + 그라데이션 배경 + overflow:hidden 조합이
+       transform 애니메이션과 만나면 모서리 부근에 얇은 가로줄(seam)이 보이는 렌더링 버그가 있다.
+       -webkit-mask-image로 강제로 다시 클리핑시키고, 별도 레이어로 승격해 이음선을 없앤다. */
+    -webkit-mask-image:-webkit-radial-gradient(white, black);
+    -webkit-backface-visibility:hidden;
+    -webkit-transform:translateZ(0);
   }
   .card:first-child{margin-left:0;}
   /* 절대 위치로 고정: 폰트 크기가 환경에 따라 조금 달라져도 모서리 밖으로 밀려나지 않음 */
@@ -253,6 +263,16 @@
     position:absolute; bottom:2px; left:2px;
     width:14px;height:14px; border-radius:50%;
     background:var(--gold-bright); color:#3a2a0a;
+    font-size:9px; font-weight:900; line-height:14px; text-align:center;
+    box-shadow:0 1px 3px #00000070; z-index:2;
+  }
+  /* 조커콜(리퍼) 카드 표시: 마이티(M)와 같은 자리(좌측 하단)에 표시되지만, 조커콜 카드는
+     항상 특정 3(클로버3 또는 스페이드3)이라 마이티와 같은 카드가 될 수 없어 겹치지 않는다. */
+  .card.is-jokercall::after{
+    content:"G";
+    position:absolute; bottom:2px; left:2px;
+    width:14px;height:14px; border-radius:50%;
+    background:#7fd3ff; color:#0a2a3a;
     font-size:9px; font-weight:900; line-height:14px; text-align:center;
     box-shadow:0 1px 3px #00000070; z-index:2;
   }
@@ -405,7 +425,13 @@
     0%{ transform:translateY(0) rotate(0deg); opacity:1; }
     100%{ transform:translateY(140px) rotate(340deg); opacity:0; }
   }
-  .online-timer{margin:0 14px 7px;padding:5px 10px;border:1px solid #f0cd8a88;border-radius:12px;background:#00000045;color:var(--gold-bright);font-size:11px;text-align:center;font-weight:800;letter-spacing:.3px;z-index:21;}
+  .online-timer{
+    position:fixed;top:8px;left:50%;transform:translateX(-50%);
+    width:calc(100% - 24px);max-width:492px;
+    margin:0;padding:5px 10px;border:1px solid #f0cd8a88;border-radius:12px;
+    background:#0e2a20f0;color:var(--gold-bright);font-size:11px;text-align:center;font-weight:800;letter-spacing:.3px;
+    z-index:210;box-shadow:0 4px 14px #00000060;
+  }
   .online-timer.urgent{color:#ff7777;border-color:#ff777788;animation:timerPulse .5s infinite alternate;}
   @keyframes timerPulse{ from{opacity:1;} to{opacity:.55;} }
   .online-player-row{display:flex;align-items:center;gap:7px;padding:7px 9px;border:1px solid var(--line);border-radius:9px;background:#00000025;margin-bottom:6px;font-size:12px;}
@@ -418,7 +444,7 @@
   /* ---------- TOAST (접속 끊김 등 알림) ---------- */
   #toastStack{
     position:absolute;top:56px;left:50%;transform:translateX(-50%);
-    z-index:60;display:flex;flex-direction:column;gap:6px;align-items:center;
+    z-index:200;display:flex;flex-direction:column;gap:6px;align-items:center;
     pointer-events:none;width:calc(100% - 24px);max-width:480px;
   }
   .toast{
@@ -441,7 +467,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.204</span><span>MIGHTY CARD GAME</span></div>
+    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.223</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -463,6 +489,7 @@
   <div id="handWrap">
     <div id="handInfo">
       <span id="handTitle">내 패</span>
+      <span id="myRoleTag"></span>
       <span id="handHint"></span>
     </div>
     <div id="myScoreCards"></div>
@@ -539,13 +566,47 @@ if(window.visualViewport) window.visualViewport.addEventListener("resize", setVi
 */
 let sfxCtx = null;
 let sfxMuted = false;
-function getSfxCtx(){
+let sfxUnlocked = false;
+function ensureSfxCtx(){
   if(!sfxCtx){
     try{ sfxCtx = new (window.AudioContext || window.webkitAudioContext)(); }catch(e){ return null; }
   }
-  if(sfxCtx.state==="suspended") sfxCtx.resume().catch(()=>{});
   return sfxCtx;
 }
+// 아이폰 사파리는 화면 전환/전화 수신 등으로 오디오 컨텍스트가 "suspended" 뿐 아니라
+// "interrupted" 상태가 되기도 한다. running이 아니면 상태와 무관하게 무조건 재개를 시도한다.
+function resumeSfxCtx(){
+  const ctx = sfxCtx;
+  if(!ctx) return Promise.resolve(null);
+  if(ctx.state==="running") return Promise.resolve(ctx);
+  return ctx.resume().then(()=>ctx).catch(()=>ctx);
+}
+function getSfxCtx(){
+  const ctx = ensureSfxCtx();
+  if(ctx && ctx.state!=="running") resumeSfxCtx();
+  return ctx;
+}
+// 아이폰 사파리는 실제 사용자 터치 이벤트 "안에서" 오디오를 한 번 재생해야 이후 자동(타이머 등) 재생도
+// 막히지 않는다. 화면을 처음 탭/클릭하는 순간 무음 버퍼를 한 번 실제로 재생시켜 잠금을 확실히 풀어둔다.
+function unlockSfxOnce(){
+  if(sfxUnlocked) return;
+  sfxUnlocked = true;
+  const ctx = ensureSfxCtx();
+  if(!ctx) return;
+  try{
+    const buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
+    const src = ctx.createBufferSource();
+    src.buffer = buffer;
+    src.connect(ctx.destination);
+    src.start(0);
+  }catch(e){}
+  resumeSfxCtx();
+}
+["touchstart","touchend","pointerdown","mousedown","click","keydown"].forEach(evt=>{
+  document.addEventListener(evt, unlockSfxOnce, {once:true, passive:true});
+});
+// 다른 화면(앱 전환 등)에 나갔다 돌아왔을 때 오디오 컨텍스트가 잠들어 있을 수 있어 다시 깨워준다.
+document.addEventListener("visibilitychange", ()=>{ if(!document.hidden) resumeSfxCtx(); });
 // 하나의 톤(oscillator)을 짧게 재생. freq: 주파수(Hz) 또는 [시작,끝] 배열(글리산도), type: 파형
 function sfxTone(ctx, freq, startTime, duration, {type="sine", gain=0.18, attack=0.005, release=0.05}={}){
   const osc = ctx.createOscillator();
@@ -613,7 +674,15 @@ function sfxPlay(key){
     const ctx = getSfxCtx();
     if(!ctx) return;
     const pattern = SFX_PATTERNS[key];
-    if(pattern) pattern(ctx, ctx.currentTime);
+    if(!pattern) return;
+    if(ctx.state!=="running"){
+      // 아직 잠겨있는 상태라면 그냥 버리지 않고, 깨어나는 대로 재생한다.
+      resumeSfxCtx().then((resumedCtx)=>{
+        if(resumedCtx && resumedCtx.state==="running" && !sfxMuted) pattern(resumedCtx, resumedCtx.currentTime);
+      });
+      return;
+    }
+    pattern(ctx, ctx.currentTime);
   }catch(e){ /* 무시 */ }
 }
 async function loadSfxPref(){
@@ -704,7 +773,12 @@ function sortHand(hand, giruda, mighty){
 // ⚠️ Render에 서버를 배포한 뒤, 아래 주소를 실제 서비스 주소로 바꿔주세요. (예: wss://mighty-online.onrender.com)
 const ONLINE_SERVER_URL = "wss://mighty-online-6svd.onrender.com";
 const ONLINE_LIMIT_MS = 20000;
-const online = {ws:null, connected:false, host:false, room:"", playerId:null, nickname:"", players:[], deadline:0, timerHandle:null, uiTimerHandle:null, starting:false};
+const online = {ws:null, connected:false, host:false, room:"", playerId:null, nickname:"", token:"", players:[], deadline:0, timerHandle:null, uiTimerHandle:null, starting:false};
+let onlineReconnectAttempt = 0;
+let onlineReconnectTimer = null;
+// 온라인 방장이 로비에서 고르는 매치 설정(시작 점수/종료 방식/판 수). 로비가 재렌더링(인원 변경 등)되어도
+// 방장이 고른 값이 초기화되지 않도록 모듈 스코프에 별도로 보관해둔다.
+const onlineLobbySettings = {startScore:50, endMode:"rounds", totalRounds:1};
 
 function onlineEnabled(){ return !!(online.connected && online.ws && online.ws.readyState===WebSocket.OPEN); }
 function meId(){ return onlineEnabled() ? online.playerId : 0; }
@@ -724,12 +798,15 @@ function onlineUrl(){
 }
 function onlineSend(o){ if(onlineEnabled()) online.ws.send(JSON.stringify(o)); }
 function onlineDisconnect(silent){
+  if(onlineReconnectTimer){ clearTimeout(onlineReconnectTimer); onlineReconnectTimer=null; }
+  onlineReconnectAttempt = 0;
   if(online.timerHandle) clearInterval(online.timerHandle); online.timerHandle=null;
   if(online.ws){ try{ online.ws.onclose=null; online.ws.close(); }catch(e){} }
-  online.ws=null; online.connected=false; online.host=false; online.playerId=null; online.players=[]; online.room="";
+  online.ws=null; online.connected=false; online.host=false; online.playerId=null; online.players=[]; online.room=""; online.token="";
   if(online.uiTimerHandle) clearInterval(online.uiTimerHandle); online.uiTimerHandle=null;
   const el = document.getElementById("onlineTimer");
   if(el) el.style.display="none";
+  if(!silent){ try{ localStorage.removeItem("mighty_online_room"); localStorage.removeItem("mighty_online_token"); }catch(e){} }
 }
 // host만 타이머를 발급/집행한다: 제한시간 안에 행동이 없으면 host가 대신 패스/AI행동을 실행해 게임이 멈추지 않게 한다.
 function onlineArmTimer(pid, phase){
@@ -786,46 +863,98 @@ function broadcastOnlineState(){
 function handleOnlineAction(action, pid){
   if(!G || !action) return;
   if(action.type==="bid" && G.phase==="bidding" && G.bidTurn===pid) humanBid(action.bid, pid, true);
+  else if(action.type==="dealMiss" && G.phase==="bidding" && G.bidTurn===pid) declareDealMiss(pid, true);
   else if(action.type==="play" && G.phase==="play" && ((G.leader+G.trick.length)%5)===pid){
     const wasLead = G.trick.length===0;
     const card = action.card;
-    playCard(pid, card, true);
+    playCard(pid, card, true, !!action.suppressJokerCall);
     if(wasLead && card===JOKER && G.trickNum>1 && G.trickNum<10){
+      if(G.players[pid].isHuman){
+        // 실제 사람(원격 게스트)이 조커로 리드했다면, host가 AI로 무늬를 대신 정해버리지 않고
+        // 그 사람이 직접 고를 때까지 기다린다. playCard()가 이미 render()→broadcast를 했으니
+        // 게스트 화면에는 방금 낸 조커가 반영돼 있고, 게스트 쪽 openJokerLeadSuitPicker에서
+        // 고른 무늬는 "jokerLeadSuit" 액션으로 되돌아온다(아래 분기). 그때까지는 다음 턴으로
+        // 넘어가지 않는다(scheduleTurn()을 호출하지 않음).
+        return;
+      }
       const suit = aiChooseJokerCallSuit(pid);
       G.ledSuit = suit;
       logMsg(`🃏 ${G.players[pid].name}의 조커 선언: 이번 트릭은 ${SUIT_NAME[suit]} 기준으로 진행됩니다.`);
     }
     scheduleTurn();
   }
+  else if(action.type==="jokerLeadSuit" && G.phase==="play" && G.trick.length===1 && G.trick[0].card===JOKER && G.trick[0].playerId===pid && G.ledSuit===null){
+    // 원격 게스트가 조커 리드 후 직접 고른 기준 무늬가 도착했을 때 반영하고, 그제서야 다음 턴을 진행한다.
+    G.ledSuit = action.suit;
+    logMsg(`🃏 ${G.players[pid].name}의 조커 선언: 이번 트릭은 ${SUIT_NAME[action.suit]} 기준으로 진행됩니다.`);
+    scheduleTurn();
+  }
   else if(action.type==="exchange" && G.phase==="exchange" && G.declarer===pid) doExchange(action.cards, true);
+  else if(action.type==="dealMissExchange" && G.phase==="exchange" && G.declarer===pid) declareDealMissAsDeclarer(true);
   else if(action.type==="friend" && G.phase==="friend" && G.declarer===pid) applyFriend(action.choice, true);
 }
-function connectOnline(nickname, roomCode){
+// 게스트는 카드 진행/트릭 판정을 직접 실행하지 않고 host가 보낸 state 브로드캐스트를
+// 받아 화면만 갱신하기 때문에, 기존에는 sfxPlay()를 거치는 코드 경로 자체를 타지 않아
+// 온라인 모드(게스트 시점)에서는 효과음이 전혀 나지 않았다. 이전/이후 상태를 비교해서
+// 카드 낸 소리·트릭 승리 소리·판 승패 소리를 게스트 쪽에서도 재현해준다.
+function guestPlaySfxForStateDiff(prevG, newG){
+  try{
+    if(!prevG || !newG) return;
+    if(newG.phase==="result" && prevG.phase!=="result" && newG.result){
+      sfxPlay(newG.result.myWin ? "win" : "lose");
+      return;
+    }
+    if(prevG.phase==="play" && newG.phase==="play"){
+      if(newG.trickNum>prevG.trickNum){
+        sfxPlay("trick"); // 트릭이 완료되며 다음 트릭으로 넘어감
+      } else if(newG.trickNum===prevG.trickNum && (newG.trick||[]).length>(prevG.trick||[]).length){
+        sfxPlay("card"); // 같은 트릭 안에서 카드가 추가로 나감
+      }
+    }
+  }catch(e){ /* 무시 */ }
+}
+function connectOnline(nickname, roomCode, token, silentReconnect){
   onlineDisconnect(true);
   online.nickname = nickname;
   try{ localStorage.setItem("mighty_online_nickname", nickname); }catch(e){}
   const url = onlineUrl();
   let ws;
-  try{ ws = new WebSocket(url); }catch(e){ alert("온라인 서버 주소가 올바르지 않습니다: "+url); return; }
+  try{ ws = new WebSocket(url); }catch(e){ if(!silentReconnect) alert("온라인 서버 주소가 올바르지 않습니다: "+url); return; }
   online.ws = ws;
   if(online.uiTimerHandle) clearInterval(online.uiTimerHandle);
   online.uiTimerHandle = setInterval(onlineRenderTimer, 250);
-  openModal(`<h2>연결 중…</h2><p class="sub">${escHtml(url)} 에 접속하고 있습니다.</p>`);
+  if(!silentReconnect) openModal(`<h2>연결 중…</h2><p class="sub">${escHtml(url)} 에 접속하고 있습니다.</p>`);
   const connectTimeout = setTimeout(()=>{
     if(!online.connected){
-      alert("서버에 연결하지 못했습니다.\n주소: "+url+"\n\n· 주소가 wss:// 로 시작하는지\n· Render 서비스가 배포/실행 중인지(무료 플랜은 첫 접속 시 수십 초 걸릴 수 있음)\n· server.js가 \"/ws\" 경로로 웹소켓을 열고 있는지\n확인해주세요.");
-      onlineDisconnect();
-      showRoundSetup();
+      if(silentReconnect){
+        scheduleOnlineReconnect();
+      } else {
+        alert("서버에 연결하지 못했습니다.\n주소: "+url+"\n\n· 주소가 wss:// 로 시작하는지\n· Render 서비스가 배포/실행 중인지(무료 플랜은 첫 접속 시 수십 초 걸릴 수 있음)\n· server.js가 \"/ws\" 경로로 웹소켓을 열고 있는지\n확인해주세요.");
+        onlineDisconnect();
+        showRoundSetup();
+      }
     }
   }, 8000);
-  ws.onopen = ()=> ws.send(JSON.stringify({type:"join", nickname, room:(roomCode||"").toUpperCase()}));
+  ws.onopen = ()=> ws.send(JSON.stringify({type:"join", nickname, room:(roomCode||"").replace(/\D/g,""), token: token||undefined}));
   ws.onmessage = (ev)=>{
     let m; try{ m = JSON.parse(ev.data); }catch(e){ return; }
     if(m.type==="welcome"){
       clearTimeout(connectTimeout);
+      onlineReconnectAttempt = 0;
+      const wasMidGame = !!G;
       online.connected=true; online.playerId=m.playerId; online.host=!!m.host; online.room=m.room; online.players=m.players||[];
-      try{ localStorage.setItem("mighty_online_room", online.room); }catch(e){}
-      renderOnlineLobby();
+      if(m.token) online.token=m.token;
+      try{ localStorage.setItem("mighty_online_room", online.room); localStorage.setItem("mighty_online_token", online.token||""); }catch(e){}
+      if(silentReconnect && wasMidGame){
+        // 게임 도중 재접속: 로비로 돌리지 않고 하던 게임을 그대로 이어서 보여준다.
+        closeOnlineModals();
+        showToast("✅ 다시 연결되었습니다.", "info");
+        if(online.host) broadcastOnlineState(); // 방장이면 끊긴 동안 놓쳤을 최신 상태를 다시 뿌려준다
+        render();
+        guestMaybePromptTurn();
+      } else {
+        renderOnlineLobby();
+      }
     } else if(m.type==="lobby"){
       online.players = m.players||[];
       const me = online.players.find(p=>p.id===online.playerId);
@@ -838,9 +967,12 @@ function connectOnline(nickname, roomCode){
                                // (그렇지 않으면 render()→broadcast→자기 자신 수신→render()→broadcast… 로 무한 루프가 돌면서 화면이 계속 깜박인다)
       if(m.state && m.state.G){
         const wasNoGame = !G;
+        const prevG = G;
         G = deserializeG(m.state.G);
         Object.assign(matchState, m.state.matchState||{});
         online.deadline = m.state.deadline||0;
+        if(G.result) applyMyPerspective(G.result); // host가 보낸 myTeam/myWin(host 자신의 시점)을 내 시점 값으로 덮어쓴다
+        guestPlaySfxForStateDiff(prevG, G);
         render();
         // guest는 로컬 타이머/AI 실행 없이 화면만 최신 상태로 맞춘다. 다음 턴 진행은 host의 broadcast가 담당한다.
         // 다만, "내 차례"로 바뀐 배팅/카드교환/프렌드 지목 화면은 host의 scheduleXXX()가 아니라
@@ -849,10 +981,24 @@ function connectOnline(nickname, roomCode){
       }
     } else if(m.type==="timer"){
       online.deadline = m.deadline||0; onlineRenderTimer();
+    } else if(m.type==="peer_away"){
+      const nm = m.name||"플레이어";
+      logMsgSafe(`⏸️ ${escHtml(nm)}님의 연결이 잠시 끊겼습니다. 10초 안에 돌아오지 않으면 게임이 종료됩니다.`);
+      showToast(`⏸️ ${nm}님이 잠깐 끊겼어요. 10초 내로 재접속하지 않으면 게임이 종료됩니다.`);
+    } else if(m.type==="peer_back"){
+      const nm = m.name||"플레이어";
+      logMsgSafe(`▶️ ${escHtml(nm)}님이 다시 접속했습니다.`);
+      showToast(`▶️ ${nm}님이 다시 접속했습니다!`, "info");
+      if(online.host) broadcastOnlineState();
     } else if(m.type==="peer_left"){
       const nm = m.name||"플레이어";
       logMsgSafe(`⚠️ ${escHtml(nm)}님이 방을 나갔습니다. 해당 자리는 AI가 대신합니다.`);
       showToast(`⚠️ ${nm}님의 접속이 끊겼습니다. 해당 자리는 AI가 대신 진행합니다.`);
+    } else if(m.type==="room_closed"){
+      const nm = m.name||"플레이어";
+      alert(`⚠️ ${nm}님이 10초 안에 다시 접속하지 못해 게임이 종료되었습니다.`);
+      onlineDisconnect();
+      showRoundSetup();
     } else if(m.type==="error"){
       alert(m.message||"온라인 오류가 발생했습니다."); onlineDisconnect();
     }
@@ -862,9 +1008,31 @@ function connectOnline(nickname, roomCode){
     const was = online.connected;
     online.connected=false; online.ws=null;
     const el = document.getElementById("onlineTimer"); if(el) el.style.display="none";
-    if(was) alert("온라인 방 연결이 종료되었습니다.");
+    if(was) scheduleOnlineReconnect();
   };
   ws.onerror = (e)=>{ console.error("온라인 서버 연결 오류", url, e); };
+}
+// 예상치 못하게 연결이 끊겼을 때(다른 화면으로 잠깐 나갔다 오는 등) 자동으로 재접속을 시도한다.
+// 사용자가 직접 "나가기"를 눌렀을 때는 onlineDisconnect()가 ws.onclose를 미리 null로 지워두므로 여기가 실행되지 않는다.
+function scheduleOnlineReconnect(){
+  const room = online.room || (()=>{ try{ return localStorage.getItem("mighty_online_room")||""; }catch(e){ return ""; } })();
+  const token = online.token || (()=>{ try{ return localStorage.getItem("mighty_online_token")||""; }catch(e){ return ""; } })();
+  const nickname = online.nickname || (()=>{ try{ return localStorage.getItem("mighty_online_nickname")||""; }catch(e){ return ""; } })();
+  if(!room || !token || !nickname){ onlineDisconnect(); showRoundSetup(); return; }
+  onlineReconnectAttempt++;
+  if(onlineReconnectAttempt === 1) showToast("⚠️ 연결이 끊겼습니다. 재접속을 시도합니다…");
+  if(onlineReconnectAttempt > 6){
+    onlineReconnectAttempt = 0;
+    alert("온라인 방에 다시 연결하지 못했습니다.");
+    onlineDisconnect();
+    showRoundSetup();
+    return;
+  }
+  if(onlineReconnectTimer) clearTimeout(onlineReconnectTimer);
+  onlineReconnectTimer = setTimeout(()=>{
+    onlineReconnectTimer = null;
+    connectOnline(nickname, room, token, true);
+  }, Math.min(1500*onlineReconnectAttempt, 6000));
 }
 function logMsgSafe(s){ if(G && typeof logMsg==="function") logMsg(s); }
 // 화면 상단에 잠깐 뜨는 알림 배너 (접속 끊김 등). alert()과 달리 게임 흐름을 막지 않는다.
@@ -893,23 +1061,55 @@ function guestMaybePromptTurn(){
     renderExchangeUI();
   } else if(G.phase==="friend" && G.declarer===my){
     renderFriendUI();
+  } else if(G.phase==="result"){
+    // 방장(host)이 finishGame()에서 결과를 계산해 브로드캐스트하면, 게스트는 여기서 자기 화면에도
+    // 결과 모달을 띄워줘야 한다. 그렇지 않으면 방장 화면에만 결과가 나오고 게스트는 그냥 대기 화면에
+    // 머무는 버그가 생긴다. resultSeq(매치가 바뀌어도 계속 증가하는 값)로 "이미 보여준 결과"인지
+    // 판별해서, 같은 결과를 중복으로 다시 열어 애니메이션/모달을 리셋하지 않도록 한다.
+    if(guestLastResultSeq !== matchState.resultSeq){
+      guestLastResultSeq = matchState.resultSeq;
+      applyRoundResultToLocalProfile(); // 게스트 자신의 로컬 프로필(레벨/XP)에 이번 판 결과를 반영
+      renderResultUI();
+    }
   } else {
     closeOnlineModals();
   }
 }
+let guestLastResultSeq = -1;
 function closeOnlineModals(){
   const overlay = document.getElementById("modalOverlay");
   if(overlay) overlay.classList.remove("show");
 }
 function renderOnlineLobby(){
   if(!online.connected) return;
-  const rows = online.players.map(p=>`<div class="online-player-row"><span class="dot"></span><span>${escHtml(p.name)}</span><span style="margin-left:auto;opacity:.55">${p.host?"방장":"플레이어"}</span></div>`).join("");
+  const rows = online.players.map(p=>`<div class="online-player-row"><span class="dot"></span><span>${escHtml(p.name)}${p.connected===false?' <span style="opacity:.6;font-size:12px;">(AI 대행 중)</span>':''}</span><span style="margin-left:auto;opacity:.55">${p.host?"방장":"플레이어"}</span></div>`).join("");
+  const presets = [1,3,5,7,9];
+  const optHtml = presets.map(n=>`<div class="count-opt" data-n="${n}" style="width:44px;">${n}판</div>`).join("");
+  const settingsHtml = online.host ? `
+    <p class="sub" style="margin-top:10px;">시작 점수 (보통 50점)</p>
+    <div class="row"><input type="number" id="onlineStartScoreInput" value="${onlineLobbySettings.startScore}" min="0" max="999" style="flex:1;padding:9px 10px;border-radius:8px;border:1px solid var(--line);background:#0000002a;color:var(--paper);font-size:14px;"></div>
+    <p class="sub">종료 방식</p>
+    <div class="row" id="onlineEndModeRow">
+      <div class="suit-opt${onlineLobbySettings.endMode==="rounds"?" sel":""}" data-mode="rounds" style="font-size:13px;">📅 정해진 판 수</div>
+      <div class="suit-opt${onlineLobbySettings.endMode==="bust"?" sel":""}" data-mode="bust" style="font-size:13px;">💥 점수 소진 시까지</div>
+    </div>
+    <div id="onlineRoundCountSection" style="display:${onlineLobbySettings.endMode==="rounds"?"":"none"};">
+      <p class="sub">몇 판을 진행할까요? 매판마다 딜러가 자동으로 바뀝니다.</p>
+      <div class="count-row" id="onlineRoundRow">${optHtml}</div>
+      <p class="sub">직접 입력</p>
+      <div class="row"><input type="number" id="onlineCustomRounds" min="1" max="99" placeholder="예: 4" value="${presets.includes(onlineLobbySettings.totalRounds)?"":onlineLobbySettings.totalRounds}" style="flex:1;padding:9px 10px;border-radius:8px;border:1px solid var(--line);background:#0000002a;color:var(--paper);font-size:14px;"></div>
+    </div>
+    <p class="sub" id="onlineBustHint" style="display:${onlineLobbySettings.endMode==="bust"?"":"none"};">한 명이라도 점수가 0점 이하가 되면 그 판을 마지막으로 매치가 종료됩니다.</p>
+  ` : `
+    <p class="online-hint" style="margin-top:10px;">시작 점수: ${onlineLobbySettings.startScore}점 · ${onlineLobbySettings.endMode==="bust"?"점수 소진 시까지":onlineLobbySettings.totalRounds+"판"}</p>
+  `;
   openModal(`
     <h2>온라인 방</h2>
     <p class="sub">친구에게 아래 방 코드를 알려주세요. (최대 5명, 부족한 자리는 AI로 채워집니다)</p>
     <div class="room-code">${escHtml(online.room)}</div>
     ${rows}
-    <p class="online-hint">${online.host? "인원이 모이면 방장이 게임 시작을 눌러주세요." : "방장이 게임을 시작하면 자동으로 화면이 전환됩니다."}</p>
+    ${settingsHtml}
+    <p class="online-hint">${online.host? "설정을 정하고 인원이 모이면 게임 시작을 눌러주세요." : "방장이 게임을 시작하면 자동으로 화면이 전환됩니다."}</p>
     <div class="modal-actions">
       ${online.host? `<button class="btn" id="onlineStartBtn">게임 시작</button>` : ``}
       <button class="btn ghost" id="onlineLeaveBtn">나가기</button>
@@ -919,6 +1119,41 @@ function renderOnlineLobby(){
   if(leaveBtn) leaveBtn.onclick = ()=>{ closeModal(); onlineDisconnect(); showRoundSetup(); };
   const startBtn = document.getElementById("onlineStartBtn");
   if(startBtn) startBtn.onclick = ()=>{ closeModal(); startOnlineGame(); };
+  if(!online.host) return;
+  const startScoreInput = document.getElementById("onlineStartScoreInput");
+  if(startScoreInput) startScoreInput.addEventListener("input", (e)=>{
+    const v = parseInt(e.target.value,10);
+    onlineLobbySettings.startScore = isNaN(v)? 50 : v;
+  });
+  document.querySelectorAll("#onlineRoundRow .count-opt").forEach(el=>{
+    el.onclick = ()=>{
+      document.querySelectorAll("#onlineRoundRow .count-opt").forEach(x=>x.classList.remove("sel"));
+      el.classList.add("sel");
+      onlineLobbySettings.totalRounds = parseInt(el.dataset.n,10);
+      const custom = document.getElementById("onlineCustomRounds");
+      if(custom) custom.value="";
+    };
+    if(parseInt(el.dataset.n,10)===onlineLobbySettings.totalRounds) el.classList.add("sel");
+  });
+  const customRounds = document.getElementById("onlineCustomRounds");
+  if(customRounds) customRounds.addEventListener("input",(e)=>{
+    const v = parseInt(e.target.value,10);
+    if(v>=1){
+      onlineLobbySettings.totalRounds = v;
+      document.querySelectorAll("#onlineRoundRow .count-opt").forEach(x=>x.classList.remove("sel"));
+    }
+  });
+  document.querySelectorAll("#onlineEndModeRow .suit-opt").forEach(el=>{
+    el.onclick = ()=>{
+      document.querySelectorAll("#onlineEndModeRow .suit-opt").forEach(x=>x.classList.remove("sel"));
+      el.classList.add("sel");
+      onlineLobbySettings.endMode = el.dataset.mode;
+      const sec = document.getElementById("onlineRoundCountSection");
+      if(sec) sec.style.display = onlineLobbySettings.endMode==="rounds"? "" : "none";
+      const hint = document.getElementById("onlineBustHint");
+      if(hint) hint.style.display = onlineLobbySettings.endMode==="bust"? "" : "none";
+    };
+  });
 }
 function showOnlineEntry(){
   let saved=""; try{ saved = localStorage.getItem("mighty_online_nickname")||""; }catch(e){}
@@ -926,15 +1161,21 @@ function showOnlineEntry(){
     <h2>온라인 플레이</h2>
     <p class="sub">닉네임을 입력하세요. 방 코드를 비우면 새 방을 만듭니다.</p>
     <div class="row"><input id="onlineNick" maxlength="12" value="${escHtml(saved)}" placeholder="닉네임" style="flex:1;padding:10px;border-radius:8px;border:1px solid var(--line);background:#0000002a;color:var(--paper);font-size:14px"></div>
-    <div class="row"><input id="onlineRoom" maxlength="6" placeholder="방 코드 (선택)" style="flex:1;padding:10px;border-radius:8px;border:1px solid var(--line);background:#0000002a;color:var(--paper);font-size:14px;text-transform:uppercase"></div>
+    <div class="row"><input id="onlineRoom" maxlength="6" inputmode="numeric" pattern="[0-9]*" placeholder="방 코드 (숫자, 선택)" style="flex:1;padding:10px;border-radius:8px;border:1px solid var(--line);background:#0000002a;color:var(--paper);font-size:14px;"></div>
     <p class="online-hint">서버: ${escHtml(onlineUrl())}</p>
     <div class="modal-actions"><button class="btn ghost" id="onlineCancel">취소</button><button class="btn" id="onlineJoin">입장</button></div>
   `);
   document.getElementById("onlineCancel").onclick = closeModal;
+  const roomInputEl = document.getElementById("onlineRoom");
+  roomInputEl.addEventListener("input", ()=>{
+    const digitsOnly = roomInputEl.value.replace(/\D/g,"").slice(0,6);
+    if(roomInputEl.value !== digitsOnly) roomInputEl.value = digitsOnly;
+  });
   document.getElementById("onlineJoin").onclick = ()=>{
     const n = document.getElementById("onlineNick").value.trim().slice(0,12);
-    const r = document.getElementById("onlineRoom").value.trim().toUpperCase();
+    const r = document.getElementById("onlineRoom").value.trim().replace(/\D/g,"");
     if(!n){ alert("닉네임을 입력하세요."); return; }
+    if(document.getElementById("onlineRoom").value.trim() && !r){ alert("방 코드는 숫자만 입력할 수 있습니다."); return; }
     closeModal();
     connectOnline(n, r);
   };
@@ -955,8 +1196,14 @@ function buildRoster(){
 function startOnlineGame(){
   if(!online.host || online.starting) return;
   online.starting = true;
-  matchState.history=[]; matchState.currentRound=0; matchState.scores=[50,50,50,50,50];
-  matchState.totalRounds=1; matchState.endMode="rounds"; matchState.nextDealer=Math.floor(Math.random()*5);
+  matchState.history=[]; matchState.currentRound=0;
+  matchState.dealMissPool = 0;
+  const startScore = Math.max(0, Math.min(999, isNaN(onlineLobbySettings.startScore)? 50 : onlineLobbySettings.startScore));
+  matchState.startScore = startScore;
+  matchState.scores = [0,1,2,3,4].map(()=>startScore);
+  matchState.endMode = onlineLobbySettings.endMode==="bust" ? "bust" : "rounds";
+  matchState.totalRounds = Math.max(1, Math.min(99, onlineLobbySettings.totalRounds||1));
+  matchState.nextDealer=Math.floor(Math.random()*5);
   newGame();
   online.starting = false;
 }
@@ -969,8 +1216,12 @@ const matchState = {
   history:[],
   startScore:50,
   endMode:"rounds", // "rounds" | "bust"
-  scores:[50,50,50,50,50]
+  scores:[50,50,50,50,50],
+  resultSeq:0, // 결과가 나올 때마다 host가 1씩 올리는 값. 온라인 게스트가 "새로운 결과인지"를 라운드 번호가
+              // 매치마다 초기화되는 것과 무관하게 안정적으로 판별하기 위해 사용한다.
+  dealMissPool:0 // 딜미스로 깎인 점수가 쌓이는 곳. 그 판이 새로 진행되어 여당이 승리하면 여당에게 지급된다.
 };
+const DEAL_MISS_PENALTY = 1; // 딜미스 선언 시 선언자가 깎는 점수(=여당이 승리하면 돌려받는 점수 풀에 적립)
 
 /* ============================ 경험치 / 레벨 프로필 (매치와 무관하게 영구 저장) ============================ */
 const profile = { level:1, xp:0, totalGames:0, totalWins:0, currentStreak:0, bestStreak:0 };
@@ -1049,6 +1300,42 @@ function showProfileBackupUI(){
 }
 function xpToNextLevel(level){ return 100 + (level-1)*35; }
 function levelProgressPercent(level, xp){ return Math.max(0, Math.min(100, (xp/xpToNextLevel(level))*100)); }
+
+// 이 판에서 "나"(이 기기의 시점)의 팀/승패를 로컬에서 다시 계산해 G.result에 채워 넣는다.
+// declarerTeam/success(주공팀이 이겼는지)는 시점과 무관한 값이라 그대로 방송되지만,
+// myTeam/myWin은 "누가 보고 있느냐"에 따라 달라지므로 host가 계산해 방송한 값을 그대로 쓰면
+// 안 된다 (예전에는 항상 0번 자리 기준으로 계산해서, 다른 자리에 앉은 게스트에게는
+// 자기 자신이 아니라 엉뚱한 사람의 승패/레벨이 표시되는 버그가 있었다).
+function applyMyPerspective(r){
+  if(!r) return;
+  r.myTeam = teamOf(meId());
+  r.myWin = (r.myTeam==="declarer") ? r.success : !r.success;
+}
+// 이번 판 결과(G.result)를 "이 기기"의 로컬 프로필(누적 전적/레벨/XP)에 반영한다.
+// 온라인 모드에서는 host와 각 게스트가 각자 자기 기기에서 이 함수를 한 번씩 호출해서,
+// XP/레벨이 host의 진행 상황이 아니라 각자 자신의 진행 상황으로 계산되도록 한다.
+// matchState.resultSeq를 기준으로 라운드당 한 번만 반영되도록 막는다(중복 방송/재렌더 방지).
+let xpAppliedForSeq = -1;
+function applyRoundResultToLocalProfile(){
+  if(!G || !G.result) return;
+  const seq = matchState.resultSeq||0;
+  if(xpAppliedForSeq===seq) return;
+  xpAppliedForSeq = seq;
+  applyMyPerspective(G.result);
+  const r = G.result;
+  profile.totalGames += 1;
+  if(r.myWin) profile.totalWins += 1;
+  const {xp:xpGain, breakdown:xpBreakdown} = computeXpGain(r);
+  const {startLevel, startXp, levelUps, levelDowns} = applyXpGain(xpGain);
+  r.xpGain = xpGain;
+  r.xpBreakdown = xpBreakdown;
+  r.xpStartLevel = startLevel;
+  r.xpStartXp = startXp;
+  r.xpLevelUps = levelUps;
+  r.xpLevelDowns = levelDowns;
+  r.streak = profile.currentStreak;
+  saveProfile();
+}
 
 function computeXpGain(r){
   const breakdown = [];
@@ -1173,18 +1460,18 @@ function aiEvaluateHand(hand){
 function aiDecideBid(playerId){
   const p = G.players[playerId];
   const ev = aiEvaluateHand(p.hand);
-  const suggested = 12 + Math.round(ev.strength/2.6); // rough mapping
+  const suggested = 12 + Math.round(ev.strength/2.8); // rough mapping — 손패 실제 강도 기준 감당 가능한 목표치
+  const cap = Math.min(20, suggested); // 이 손패로 노려볼 수 있는 상한선 (승산과 무관하게 무조건 13을 부르지 않도록, 강제 최소치를 두지 않음)
   const cur = G.highestBid;
   const curCount = cur? cur.count : 12;
-  let want = Math.max(13, Math.min(20, suggested));
   if(!cur){
-    if(want>=13) return {suit:ev.suit,count:Math.max(13,Math.min(want,20))};
+    if(cap>=13) return {suit:ev.suit,count:13}; // 손패가 받쳐줘도 처음엔 최소치로 조심스럽게 시작(바로 목표치까지 지르지 않음)
     return null;
   }
-  if(want > curCount && curCount<20){
-    return {suit:ev.suit, count:Math.min(20,curCount+1)};
+  if(cap > curCount && curCount<20){
+    return {suit:ev.suit, count:curCount+1}; // 내 손패가 감당 가능한 한도 내에서만 1점씩 올림
   }
-  return null; // pass
+  return null; // 내 손패로는 더 못 감당 → 패스
 }
 
 function placeBid(playerId, bid){
@@ -1198,6 +1485,49 @@ function passBid(playerId){
   logMsg(`💬 ${G.players[playerId].name} 패스`);
 }
 
+/* ============================ 딜미스 ============================ */
+// 정식 룰: 손패(10장)에 점수 카드(10 이상)가 하나도 없으면 딜미스를 선언할 수 있다.
+function handHasNoScoreCards(hand){
+  return hand.filter(isScoreCard).length===0;
+}
+function canDeclareDealMiss(pid){
+  if(!G || G.phase!=="bidding") return false;
+  return handHasNoScoreCards(G.players[pid].hand);
+}
+// 새 딜러를 지정해 이번 판을 없던 것으로 하고 다시 딜한다.
+// penaltyPid가 지정되면 그 사람의 점수를 DEAL_MISS_PENALTY만큼 깎아 딜미스 적립금에 더한다.
+// (적립금은 다음 판에서 여당이 승리하면 여당에게 돌아간다 — finishGame 참고)
+function redeal(newDealerId, penaltyPid){
+  if(penaltyPid!==null && penaltyPid!==undefined){
+    matchState.scores[penaltyPid] = (matchState.scores[penaltyPid]||0) - DEAL_MISS_PENALTY;
+    matchState.dealMissPool = (matchState.dealMissPool||0) + DEAL_MISS_PENALTY;
+    logMsg(`📉 ${G.players[penaltyPid].name} 점수 ${DEAL_MISS_PENALTY} 차감 (딜미스 페널티 — 다음 판에 여당이 승리하면 여당에게 반환됩니다)`);
+  }
+  matchState.nextDealer = newDealerId;
+  matchState.currentRound = Math.max(0, matchState.currentRound-1); // 딜미스 판은 진행된 것으로 치지 않는다
+  closeModal();
+  render();
+  setTimeout(()=>{ if(G) newGame(); }, 1100);
+}
+function declareDealMiss(pid, fromHost=false){
+  if(onlineEnabled() && !online.host && !fromHost){ onlineSend({type:"action", action:{type:"dealMiss"}, playerId:pid}); return; }
+  if(G.phase!=="bidding" || G.bidTurn!==pid) return;
+  if(!canDeclareDealMiss(pid)) return;
+  logMsg(`⚠️ ${G.players[pid].name} 딜미스 선언! (손패에 점수 카드 없음) ${josaGa(G.players[pid].name)} 새 딜러가 되어 다시 딜합니다.`);
+  redeal(pid, pid);
+}
+// 선거 종료 후: 주공이 바닥패까지 받은 13장 손패에도 점수 카드가 하나도 없으면, 카드 교환 전에 딜미스를 선언할 수 있다.
+function canDeclareDealMissAsDeclarer(){
+  return !!G && G.phase==="exchange" && handHasNoScoreCards(G.players[G.declarer].hand);
+}
+function declareDealMissAsDeclarer(fromHost=false){
+  if(onlineEnabled() && !online.host && !fromHost){ onlineSend({type:"action", action:{type:"dealMissExchange"}, playerId:meId()}); return; }
+  if(!canDeclareDealMissAsDeclarer()) return;
+  logMsg(`⚠️ ${G.players[G.declarer].name} 딜미스 선언! (13장 손패에 점수 카드 없음) ${josaGa(G.players[G.declarer].name)} 새 딜러가 되어 다시 딜합니다.`);
+  redeal(G.declarer, G.declarer);
+}
+
+
 function scheduleBidStep(){
   if(!G) return; // 방어: "새 게임"으로 초기화된 뒤 지연 타이머가 실행되는 경우
   render();
@@ -1208,12 +1538,10 @@ function scheduleBidStep(){
     return;
   }
   if(!G.highestBid && active.length===0){
-    // 전원 패스 -> 강제 최저입찰 지정
-    const forced = Math.floor(Math.random()*5);
+    // 전원 패스 -> 딜미스로 간주: 기존 딜러가 유지된 채로 다시 딜한다 (페널티 없음)
     G.passedSet.clear();
-    G.highestBid = {playerId:forced, suit:SUITS[Math.floor(Math.random()*4)], count:13};
-    logMsg(`⚠️ 전원 패스! ${G.players[forced].name}에게 최저 배팅(13)이 강제 배정됩니다.`);
-    finishBidding();
+    logMsg(`⚠️ 전원 패스! 딜미스로 처리되어 딜러(${G.players[G.dealer].name})가 유지된 채 다시 딜합니다.`);
+    redeal(G.dealer, null);
     return;
   }
   const cur = G.bidTurn;
@@ -1226,20 +1554,23 @@ function scheduleBidStep(){
     finishBidding(); return;
   }
   const player = G.players[cur];
-  if(player.isHuman && isLocalSeat(cur)){
-    renderBiddingUI();
-    if(online.host) onlineArmTimer(cur, "bidding");
-  } else if(!player.isHuman) {
+  if(player.isHuman){
+    if(online.host) onlineArmTimer(cur, "bidding"); // 입찰자가 바뀔 때마다(원격 플레이어 포함) 제한시간을 다시 발급
+    if(isLocalSeat(cur)){
+      renderBiddingUI();
+    }
+    // player.isHuman && !isLocalSeat(cur): 원격 플레이어의 턴이므로 그 사람의 action 메시지를 기다린다
+  } else {
     if(onlineEnabled() && !online.host) return; // guest는 AI 턴을 직접 계산하지 않고 host의 broadcast를 기다린다
     setTimeout(()=>{
       if(!G) return; // 방어: "새 게임"으로 초기화된 뒤 지연 타이머가 실행되는 경우
+      if(canDeclareDealMiss(cur)){ declareDealMiss(cur, true); return; }
       const bid = aiDecideBid(cur);
       if(bid) placeBid(cur,bid); else passBid(cur);
       G.bidTurn = nextBidder(cur);
       scheduleBidStep();
     }, 550);
   }
-  // player.isHuman && !isLocalSeat(cur): 다른 사람(원격 플레이어)의 턴이므로 그 사람의 action 메시지를 기다린다
 }
 
 function humanBid(bid, pid=meId(), fromHost=false){
@@ -1267,11 +1598,19 @@ function startExchange(){
   const d = G.players[G.declarer];
   d.hand = d.hand.concat(G.kitty);
   d.hand = sortHand(d.hand, G.giruda, G.mighty);
-  if(d.isHuman && isLocalSeat(d.id)){
-    G.exchangeSelected = new Set();
-    if(online.host) onlineArmTimer(d.id, "exchange");
-    renderExchangeUI();
-  } else if(!d.isHuman) {
+  if(!d.isHuman && canDeclareDealMissAsDeclarer()){
+    if(onlineEnabled() && !online.host){ render(); return; }
+    declareDealMissAsDeclarer(true);
+    return;
+  }
+  if(d.isHuman){
+    if(online.host) onlineArmTimer(d.id, "exchange"); // 주공이 바뀌거나 이 단계에 들어올 때(원격 플레이어 포함) 제한시간을 발급
+    if(isLocalSeat(d.id)){
+      G.exchangeSelected = new Set();
+      renderExchangeUI();
+    }
+    // d.isHuman && !isLocalSeat(d.id): 원격 플레이어(주공)의 턴이므로 그 사람의 action 메시지를 기다린다
+  } else {
     if(onlineEnabled() && !online.host){ render(); return; }
     // AI: discard 3 weakest non-mighty/non-joker/non-giruda-high cards
     const hand = d.hand.slice();
@@ -1323,22 +1662,26 @@ const SOLO_STRENGTH_THRESHOLD = 21;
 function aiChooseFriendCondition(hand){
   const candidates = [G.mighty, JOKER, ...SUITS.filter(s=>s!==G.giruda).map(s=>s+"14").filter(k=>k!==G.mighty)];
   const available = candidates.filter(c=>!hand.includes(c));
-  if(available.length===0) return "SOLO"; // 지목할 카드가 전부 내 손에 있어 어쩔 수 없는 경우
   const strength = assessSoloStrength(hand, G.giruda, G.mighty);
   if(strength >= SOLO_STRENGTH_THRESHOLD) return "SOLO"; // 확실히 이길 수 있을 때만 의도적으로 솔로 선택
-  return available[0];
+  if(available.length>0) return available[0];
+  // 지목할 카드가 전부 내 손에 있어도, 승산이 낮으면(=솔로 기준 미달) 곧바로 노프렌드로 가지 않고
+  // 초구 프렌드로 전환해 리스크를 분산한다 (첫 트릭을 가져가는 사람이 프렌드가 됨, 내가 직접 가져가면 그때만 노프렌드).
+  return "TRICK1";
 }
 
 function startFriendSelection(){
   const d = G.players[G.declarer];
-  if(d.isHuman && isLocalSeat(d.id)){
-    if(online.host) onlineArmTimer(d.id, "friend");
-    renderFriendUI();
-  } else if(!d.isHuman) {
+  if(d.isHuman){
+    if(online.host) onlineArmTimer(d.id, "friend"); // 원격 플레이어(주공)의 턴이라도 제한시간을 발급
+    if(isLocalSeat(d.id)){
+      renderFriendUI();
+    } else {
+      render(); // 원격 플레이어의 프렌드 선택을 기다리는 동안에도 화면(phase 등)은 갱신
+    }
+  } else {
     if(onlineEnabled() && !online.host){ render(); return; }
     applyFriend(aiChooseFriendCondition(d.hand));
-  } else {
-    render(); // 원격 플레이어의 프렌드 선택을 기다리는 동안에도 화면(phase 등)은 갱신
   }
 }
 function applyFriend(choice, fromHost=false){
@@ -1387,9 +1730,10 @@ function validMoves(playerId){
   if(G.trick.length===0){
     base = hand.slice(); // leading: anything (subject to first-trick rule below)
   } else {
-    // 조커콜(리퍼)이 이번 트릭의 선으로 나왔다면, 조커를 가진 사람은 무조건 조커를 내야 한다
+    // 조커콜(리퍼)이 이번 트릭의 선으로 나왔다면, 조커를 가진 사람은 원칙적으로 조커를 내야 하지만,
+    // 마이티를 가지고 있다면 조커 대신 마이티로 방어할 수 있다(조커를 지켜낼 수 있는 유일한 예외).
     if(isJokerCallLed(G.trick) && hand.includes(JOKER)){
-      return [JOKER];
+      return hand.includes(G.mighty) ? [JOKER, G.mighty] : [JOKER];
     }
     const ledSuit = G.ledSuit;
     if(ledSuit===null){
@@ -1410,8 +1754,9 @@ function validMoves(playerId){
       }
     }
   }
-  // 규칙: 첫 트릭에는 기루다를 낼 수 없다 (다른 낼 카드가 없을 때만 예외)
-  if(G.giruda && G.trickNum===1){
+  // 규칙: 첫 트릭에는 주공이 기루다로 시작(리드)할 수 없다 (다른 낼 카드가 없을 때만 예외).
+  // 주공이 아닌 다른 플레이어는 첫 트릭에도 기루다를 리드하거나 낼 수 있다.
+  if(G.giruda && G.trickNum===1 && G.trick.length===0 && playerId===G.declarer){
     const noGiruda = base.filter(c=> c===JOKER || suitOf(c)!==G.giruda);
     if(noGiruda.length>0) base = noGiruda;
   }
@@ -1423,23 +1768,26 @@ function validMoves(playerId){
   }
   return base;
 }
-function playCard(playerId, card, fromHost=false){
+function playCard(playerId, card, fromHost=false, suppressJokerCall=false){
   if(card===undefined || card===null){
     console.error("playCard: 유효하지 않은 카드 호출 무시", playerId, card);
     return;
   }
-  if(onlineEnabled() && !online.host && !fromHost){ onlineSend({type:"action", action:{type:"play", card}, playerId}); return; }
+  if(onlineEnabled() && !online.host && !fromHost){ onlineSend({type:"action", action:{type:"play", card, suppressJokerCall}, playerId}); return; }
   const p = G.players[playerId];
   const ledThisTrick = (G.trick.length===0); // 조커콜은 선(리드)으로 냈을 때만 효력이 있다
   p.hand = p.hand.filter(c=>c!==card);
-  G.trick.push({playerId,card});
+  const isCallLead = ledThisTrick && card===jokerCallCard() && !jokerAlreadyPlayed() && !suppressJokerCall;
+  const noCallFlag = ledThisTrick && card===jokerCallCard() && suppressJokerCall;
+  G.trick.push(noCallFlag ? {playerId,card,noCall:true} : {playerId,card});
   sfxPlay("card");
-  const isCallLead = ledThisTrick && card===jokerCallCard() && !jokerAlreadyPlayed();
   if(G.trick.length===1){
     G.ledSuit = (card===JOKER) ? null : (card===G.mighty? suitOf(card) : suitOf(card));
     if(isCallLead){
       logMsg(`🔫 조커콜! 조커를 가진 사람은 이번 트릭에 조커를 내야 합니다.`);
       sfxPlay("jokercall");
+    } else if(noCallFlag){
+      logMsg(`${p.name}: 조커콜 카드를 그냥 일반 카드로 냈습니다.`);
     }
   }
   if(!G.friendRevealed && card===G.friendCard){
@@ -1466,7 +1814,7 @@ function jokerAlreadyPlayed(){
   return false;
 }
 function isJokerCallLed(trick){
-  return trick.length>0 && trick[0].card===jokerCallCard() && !jokerAlreadyPlayed();
+  return trick.length>0 && trick[0].card===jokerCallCard() && !trick[0].noCall && !jokerAlreadyPlayed();
 }
 // 트릭 내 카드 한 장의 승패 점수를 계산 (evalTrickWinner류 3곳에서 공통으로 사용)
 function cardTrickScore(card, trick, ledSuit){
@@ -1683,12 +2031,37 @@ function evalTrickWinnerSim(trick, ledSuitOverride){
    손패를 메모리상에 들고 있으므로, 이를 활용해 다양한 진행을 미리 시뮬레이션해보고
    자기 팀에게 가장 유리한 결과로 이어지는 카드를 선택한다. 화면/로그에는 아무것도 남기지 않으며
    실제 게임 상태(G)는 건드리지 않고 항상 복제본(snapshot) 위에서만 시뮬레이션한다. */
-function cloneStateForSim(){
+// 시뮬레이션을 하는 시점에 viewerId가 아직 직접 보지 못한(자기 손패도 아니고 이미 나온 카드도 아닌) 카드 목록.
+// 팀메이트의 실제 손패를 추정할 때 이 풀에서 무작위로 뽑아 쓴다(상대팀 손패는 여전히 실제 정보를 그대로 사용).
+function unseenCardsFor(viewerId){
+  const seen = new Set(G.players[viewerId].hand);
+  for(const p of G.players){ for(const c of p.won) seen.add(c); }
+  for(const t of G.trick) seen.add(t.card);
+  return makeDeck().filter(c=>!seen.has(c));
+}
+// viewerId 관점의 시뮬레이션 상태 복제본을 만든다.
+// - 자기 자신의 손패: 실제 그대로
+// - 그 외 모든 플레이어(팀메이트든 상대팀이든)의 손패: 전지적 정보를 쓰지 않고,
+//   아직 보지 못한 카드 풀에서 무작위로 추정한 손패를 사용한다.
+//   → 주공/프렌드 AI는 팀메이트뿐 아니라 상대팀 손패도 실제로 알지 못한 채 판단한다.
+function cloneStateForSim(viewerId){
+  const pool = shuffle(unseenCardsFor(viewerId));
+  let idx = 0;
   return {
-    players: G.players.map(p=>({id:p.id, isHuman:p.isHuman, hand:p.hand.slice(), won:p.won.slice()})),
+    players: G.players.map(p=>{
+      let hand;
+      if(p.id===viewerId){
+        hand = p.hand.slice();
+      } else {
+        const n = p.hand.length;
+        hand = pool.slice(idx, idx+n);
+        idx += n;
+      }
+      return {id:p.id, isHuman:p.isHuman, hand, won:p.won.slice()};
+    }),
     giruda: G.giruda, mighty: G.mighty, declarer: G.declarer, bidCount: G.bidCount,
     friendCard: G.friendCard, friendPlayerId: G.friendPlayerId, friendRevealed: G.friendRevealed, solo: G.solo, friendMode: G.friendMode,
-    leader: G.leader, trick: G.trick.map(t=>({playerId:t.playerId, card:t.card})), ledSuit: G.ledSuit, trickNum: G.trickNum
+    leader: G.leader, trick: G.trick.map(t=>t.noCall?{playerId:t.playerId, card:t.card, noCall:true}:{playerId:t.playerId, card:t.card}), ledSuit: G.ledSuit, trickNum: G.trickNum
   };
 }
 function simPlayCard(playerId, card){
@@ -1720,61 +2093,75 @@ function simPlayOutRemainder(){
     simPlayCard(turnIdx, aiChooseCard(turnIdx, mv));
   }
 }
-// 후보 카드 하나를 냈다고 가정하고, 그 이후를 끝까지 시뮬레이션했을 때 우리 팀이 획득하는 점수패 수를 반환
-function simRolloutScore(playerId, card){
+// 후보 카드 하나를 냈다고 가정하고, 그 이후를 끝까지 시뮬레이션했을 때 우리 팀이 그 판을 이기는지(1) 지는지(0) 반환
+function simRolloutWin(playerId, card){
   const backupG = G;
-  const snapshot = cloneStateForSim();
+  const snapshot = cloneStateForSim(playerId);
   G = snapshot;
   try{
     simPlayCard(playerId, card);
     simPlayOutRemainder();
-    const team = teamOf(playerId);
-    let pts=0;
-    for(const p of G.players){ if(teamOf(p.id)===team) pts += p.won.filter(isScoreCard).length; }
-    return pts;
+    const declarerTeam = new Set([G.declarer]);
+    if(!G.solo && G.friendPlayerId!==null) declarerTeam.add(G.friendPlayerId);
+    let teamPts=0;
+    for(const p of G.players){ if(declarerTeam.has(p.id)) teamPts += p.won.filter(isScoreCard).length; }
+    const target = Math.max(G.bidCount, 13);
+    const declarerWin = teamPts>=target;
+    const myTeam = teamOf(playerId);
+    return (myTeam==="declarer") ? (declarerWin?1:0) : (declarerWin?0:1);
   } finally {
     G = backupG;
   }
 }
-// 주공/프렌드 팀 AI 전용 카드 선택: 여러 번의 가상 진행을 통해 팀에 가장 유리한 카드를 고른다
+// 주공/프렌드 팀 AI 전용 카드 선택: 전지적 정보(상대 실제 손패)를 전혀 들여다보지 않고,
+// 자기 손패와 지금까지 나온 카드만으로 남은 카드들을 무작위로 추정해가며 여러 번 시뮬레이션한다.
+// 후보로 낼 수 있는 카드마다 이렇게 여러 번 판을 끝까지 돌려본 뒤, 우리 팀이 이길 확률이
+// 가장 높았던 카드를 선택한다 (몬테카를로 방식).
 function aiChooseCardOmniscient(playerId, moves){
   if(!moves || moves.length===0) return null; // 방어: 낼 수 있는 카드가 없으면 절대 undefined를 반환하지 않는다
   if(moves.length===1) return moves[0];
+  let candidateMoves = moves;
   // 첫 트릭에서는 조커가 항상 최하위로 무조건 진다(jokerTrickScore 참고).
   // 리드든 팔로우(버리는 카드)든, 다른 낼 카드가 있다면 가급적 조커를 첫 트릭에 내지 않는다.
-  let candidateMoves = moves;
   if(G.trickNum===1 && moves.includes(JOKER)){
     const noJoker = moves.filter(c=>c!==JOKER);
     if(noJoker.length>0) candidateMoves = noJoker;
   }
-  // 이미 같은 팀(주공/프렌드)이 이 트릭을 이기고 있는 경우: 남아서 낼 다른 플레이어들의 실제 손패(전지적 정보)를
-  // 확인해, 아무도 현재 최고점을 뒤집을 수 없다면 굳이 강한 카드를 낭비하지 않고 가장 낮은 카드로 따라간다.
-  // (아직 못 낸 상대가 현재 최고점을 뒤집을 수 있는 카드를 갖고 있다면 안전하지 않으므로 이 지름길을 적용하지 않는다)
-  if(G.trick.length>0){
-    const currentLeaderId = evalTrickWinnerSim(G.trick);
-    if(currentLeaderId!==playerId && teamOf(currentLeaderId)===teamOf(playerId)){
-      const currentBestScore = Math.max(...G.trick.map(t=>cardTrickScore(t.card, G.trick, G.ledSuit)));
-      let threatExists = false;
-      for(let step=G.trick.length; step<5 && !threatExists; step++){
-        const pid = (G.leader+step)%5;
-        if(pid===playerId) continue;
-        for(const c of G.players[pid].hand){
-          if(cardTrickScore(c, G.trick, G.ledSuit) > currentBestScore){ threatExists = true; break; }
-        }
-      }
-      if(!threatExists){
-        const sorted = candidateMoves.slice().sort((a,b)=>aiCardWeight(a)-aiCardWeight(b));
-        return sorted[0];
+  // 조커콜(리퍼)을 리드로 낼 때, 우리 팀 조커를 스스로 무력화시키는 자충수는 피한다.
+  // 상대 실제 손패는 몰라도 되고, 오직 "공개된 정보"만으로 판단한다:
+  //  - 내 손에 조커가 있다 (자기 자신의 패이므로 당연히 아는 정보)
+  //  - 또는 프렌드 카드가 조커로 지목되어 있다 (공개 선언이므로, 조커는 규칙상 항상 우리 팀에 있음이 보장됨)
+  if(G.trick.length===0){
+    const jc = jokerCallCard();
+    if(jc && candidateMoves.includes(jc)){
+      const iHoldJoker = G.players[playerId].hand.includes(JOKER);
+      const jokerGuaranteedOwnTeam = (G.friendCard===JOKER);
+      if(iHoldJoker || jokerGuaranteedOwnTeam){
+        const noCall = candidateMoves.filter(c=>c!==jc);
+        if(noCall.length>0) candidateMoves = noCall;
       }
     }
   }
-  const ROLLOUTS = 5;
-  let bestCard = candidateMoves[0], bestScore = -Infinity;
+  // 8~9트릭까지 조커를 계속 쥐고 있으면 마지막(10) 트릭에 갇혀 무조건 지는 카드가 되어버린다.
+  // 이건 상대 패를 몰라도 트릭 번호만으로 알 수 있는 규칙상 사실이므로, 이때는 지금 확실히 처리한다.
+  if(jokerRunningOutOfTime() && moves.includes(JOKER)) return JOKER;
+  // 이미 우리 편(주공/프렌드 동료)이 이 트릭을 이기고 있다면, 마이티나 조커 같은 최강 카드를 또 내서
+  // 이중으로 이기며 낭비하지 않는다. (예: 프렌드가 조커로 이기고 있는데 주공이 마이티까지 내거나,
+  // 프렌드가 마이티로 이기고 있는데 주공이 조커까지 내는 상황을 방지)
+  if(G.trick.length>0){
+    const currentLeaderId = evalTrickWinnerSim(G.trick);
+    if(currentLeaderId!==playerId && teamOf(currentLeaderId)===teamOf(playerId)){
+      const safe = candidateMoves.filter(c=>c!==G.mighty && c!==JOKER);
+      if(safe.length>0) candidateMoves = safe;
+    }
+  }
+  const ROLLOUTS = 24;
+  let bestCard = candidateMoves[0], bestWinRate = -Infinity;
   for(const card of candidateMoves){
-    let sum=0;
-    for(let i=0;i<ROLLOUTS;i++) sum += simRolloutScore(playerId, card);
-    const avg = sum/ROLLOUTS;
-    if(avg > bestScore + 1e-9){ bestScore = avg; bestCard = card; }
+    let wins=0;
+    for(let i=0;i<ROLLOUTS;i++) wins += simRolloutWin(playerId, card);
+    const rate = wins/ROLLOUTS;
+    if(rate > bestWinRate + 1e-9){ bestWinRate = rate; bestCard = card; }
   }
   return bestCard;
 }
@@ -1871,33 +2258,27 @@ function finishGame(){
   for(const pid in deltas){
     matchState.scores[pid] = (matchState.scores[pid]||0) + deltas[pid];
   }
+  // 딜미스 적립금: 이번 판 여당(주공팀)이 승리하면 쌓여있던 적립금을 여당(주공)에게 돌려준다.
+  const dealMissPayout = (win && matchState.dealMissPool>0) ? matchState.dealMissPool : 0;
+  if(dealMissPayout>0){
+    matchState.scores[G.declarer] = (matchState.scores[G.declarer]||0) + dealMissPayout;
+    logMsg(`💰 딜미스 적립금 ${dealMissPayout}점이 여당(${G.players[G.declarer].name})에게 반환됩니다.`);
+  }
+  matchState.dealMissPool = 0;
 
   G.phase="result";
-  const myTeam = teamOf(0);
-  const myWin = (myTeam==="declarer") ? win : !win;
-  G.result = {teamPts, oppPts, success:win, myWin, myTeam, declarerTeam:[...declarerTeam], base, unit, margin, isNoTrump, isRun, isBaekRun, deltas, target};
-
-  profile.totalGames += 1;
-  if(myWin) profile.totalWins += 1;
-  const {xp:xpGain, breakdown:xpBreakdown} = computeXpGain(G.result);
-  const {startLevel, startXp, levelUps, levelDowns} = applyXpGain(xpGain);
-  G.result.xpGain = xpGain;
-  G.result.xpBreakdown = xpBreakdown;
-  G.result.xpStartLevel = startLevel;
-  G.result.xpStartXp = startXp;
-  G.result.xpLevelUps = levelUps;
-  G.result.xpLevelDowns = levelDowns;
-  G.result.streak = profile.currentStreak;
-  saveProfile();
+  G.result = {teamPts, oppPts, success:win, declarerTeam:[...declarerTeam], base, unit, margin, isNoTrump, isRun, isBaekRun, deltas, target, dealMissPayout};
 
   matchState.nextDealer = (G.dealer+1)%5;
+  matchState.resultSeq = (matchState.resultSeq||0) + 1;
+  applyRoundResultToLocalProfile(); // host 자신의 이번 판 결과를 host 자신의 로컬 프로필(레벨/XP)에 반영
   matchState.history.push({
     round: matchState.currentRound,
     declarer: G.players[G.declarer].name,
     giruda: G.giruda, count: G.bidCount,
     solo: G.solo,
     friend: (!G.solo && G.friendPlayerId!==null)? G.players[G.friendPlayerId].name : null,
-    teamPts, oppPts, success:win, myWin,
+    teamPts, oppPts, success:win, myWin: G.result.myWin,
     teamNames: declarerTeam.size? [...declarerTeam].map(id=>G.players[id].name) : [],
     deltas: {...deltas},
     scoresAfter: matchState.scores.slice()
@@ -1968,7 +2349,7 @@ function renderTopbar(){
   const badges = [];
   badges.push(`<span class="status-badge level">🎖 Lv.${profile.level} · ${Math.round(profile.xp)}/${xpToNextLevel(profile.level)}xp</span>`);
   if(G.phase==="play" && G.trickNum===1){
-    badges.push(`<span class="status-badge warn">⚠ 첫 트릭: 조커 최하위 · 기루다 낼 수 없음</span>`);
+    badges.push(`<span class="status-badge warn">⚠ 첫 트릭: 조커 최하위 · 주공은 기루다로 시작 불가</span>`);
   } else if(G.phase==="play" && G.trickNum===10){
     badges.push(`<span class="status-badge warn">⚠ 마지막 트릭: 조커 최하위</span>`);
   }
@@ -2072,18 +2453,38 @@ function buildCardEl(card, mini){
     const s = SUIT_SYM[suitOf(card)], r = RANK_LABEL[rankOf(card)];
     el.innerHTML = `<div class="r">${r}<br>${s}</div><div class="s">${s}</div><div class="r bottom">${r}<br>${s}</div>`;
   }
-  // 마이티/기루다 표시: 누구의 카드든, 손패든 트릭에 깔린 카드든 항상 동일하게 표시
+  // 마이티/기루다/조커콜 표시: 누구의 카드든, 손패든 트릭에 깔린 카드든 항상 동일하게 표시
   if(G){
     if(G.mighty && card===G.mighty) el.classList.add("is-mighty");
     if(G.giruda && card!==JOKER && suitOf(card)===G.giruda) el.classList.add("is-giruda");
+    // 조커콜은 기루다가 정해진 뒤(G.mighty가 정해진 시점)부터, 조커가 아직 나오지 않았을 때만 유효하다
+    if(G.mighty && !jokerAlreadyPlayed() && card===jokerCallCard()) el.classList.add("is-jokercall");
   }
   return el;
+}
+
+function renderMyRoleTag(){
+  const el = document.getElementById("myRoleTag");
+  if(!el) return;
+  const my = meId();
+  // 프렌드는 다른 사람들에게 공개되기 전까지는(G.friendRevealed) 나 자신에게도 라벨을 띄우지 않는다.
+  if(G.declarer===my){
+    el.textContent = G.solo? "솔로 주공" : "주공";
+    el.className = "declarer";
+  } else if(!G.solo && G.friendPlayerId===my && G.friendRevealed){
+    el.textContent = "프렌드";
+    el.className = "friend";
+  } else {
+    el.textContent = "";
+    el.className = "";
+  }
 }
 
 function renderHand(){
   const hand = document.getElementById("hand");
   hand.innerHTML="";
   const me = G.players[meId()];
+  renderMyRoleTag();
   document.getElementById("handHint").textContent = `${me.hand.length}장`;
   let selectable = [];
   if(G.phase==="play" && G.trick.length<5){
@@ -2120,11 +2521,19 @@ function onHandCardClick(card){
     const mv = validMoves(meId());
     if(!mv.includes(card)) return;
     const wasLead = G.trick.length===0;
-    playCard(meId(), card);
-    if(wasLead && card===JOKER && G.trickNum>1 && G.trickNum<10){
-      openJokerLeadSuitPicker(()=>scheduleTurn());
+    const isJokerCallLeadAttempt = wasLead && card===jokerCallCard() && !jokerAlreadyPlayed();
+    const proceed = (suppress)=>{
+      playCard(meId(), card, false, suppress);
+      if(wasLead && card===JOKER && G.trickNum>1 && G.trickNum<10){
+        openJokerLeadSuitPicker(()=>scheduleTurn());
+      } else {
+        scheduleTurn();
+      }
+    };
+    if(isJokerCallLeadAttempt){
+      openJokerCallConfirm(card, (useCall)=> proceed(!useCall));
     } else {
-      scheduleTurn();
+      proceed(false);
     }
   } else if(G.phase==="exchange" && G.declarer===meId()){
     if(!G.exchangeSelected) G.exchangeSelected = new Set();
@@ -2146,12 +2555,32 @@ function openJokerLeadSuitPicker(onDone){
   document.querySelectorAll("#jokerSuitRow .suit-opt").forEach(el=>{
     el.onclick = ()=>{
       const suit = el.dataset.suit;
-      G.ledSuit = suit;
-      logMsg(`🃏 조커 선언: 이번 트릭은 ${SUIT_NAME[suit]} 기준으로 진행됩니다.`);
+      if(onlineEnabled() && !online.host){
+        // 게스트는 직접 G.ledSuit를 바꾸지 않는다(어차피 다음 broadcast로 덮어써진다).
+        // 대신 고른 무늬를 host에게 액션으로 보내고, host가 반영해 다시 broadcast하면
+        // 그 결과가 화면에 반영된다.
+        onlineSend({type:"action", action:{type:"jokerLeadSuit", suit}, playerId:meId()});
+      } else {
+        G.ledSuit = suit;
+        logMsg(`🃏 조커 선언: 이번 트릭은 ${SUIT_NAME[suit]} 기준으로 진행됩니다.`);
+      }
       closeModal();
       onDone();
     };
   });
+}
+
+function openJokerCallConfirm(card, onChoice){
+  openModal(`
+    <h2>🔫 조커콜 카드</h2>
+    <p class="sub">${cardLabel(card,false)}(을)를 선(리드)으로 냅니다. 조커콜을 발동하시겠습니까? 발동하면 조커를 가진 사람은 이번 트릭에 반드시 조커를 내야 합니다.</p>
+    <div class="modal-actions">
+      <button class="btn ghost" id="jokerCallNo">그냥 카드로 내기</button>
+      <button class="btn" id="jokerCallYes">조커콜 발동</button>
+    </div>
+  `, true);
+  document.getElementById("jokerCallYes").onclick = ()=>{ closeModal(); onChoice(true); };
+  document.getElementById("jokerCallNo").onclick = ()=>{ closeModal(); onChoice(false); };
 }
 
 function renderActionBar(){
@@ -2211,15 +2640,18 @@ function renderBiddingUI(){
   let countHtml="";
   for(let c=minCount;c<=20;c++) countHtml+=`<div class="count-opt" data-count="${c}">${c}</div>`;
   const histHtml = G.bidHistory.slice(-8).map(h=>`<div>${h}</div>`).join("") || "<div>아직 입찰 없음</div>";
+  const canMiss = canDeclareDealMiss(meId());
   openModal(`
     <h2>배팅 — ${G.players[meId()].name} 차례</h2>
     <p class="sub">현재 최고 입찰: ${cur? (suitBadge(cur.suit)+' '+cur.count+' ('+G.players[cur.playerId].name+')') : '없음'}</p>
     <div class="bidlog">${histHtml}</div>
+    ${canMiss? `<p class="sub" style="color:var(--gold-bright);">⚠️ 손패에 점수 카드가 없습니다 — 딜미스를 선언할 수 있습니다.</p>` : ``}
     <p class="sub">기루다(트럼프) 선택 — 노기루다는 배당이 2배가 됩니다</p>
     <div class="row" id="suitRow">${suitHtml}</div>
     <p class="sub">목표 점수 (최소 ${minCount})</p>
     <div class="count-row" id="countRow">${countHtml}</div>
     <div class="modal-actions">
+      ${canMiss? `<button class="btn ghost" id="dealMissBtn">🔄 딜미스 선언</button>` : ``}
       <button class="btn ghost" id="passBtn">패스</button>
       <button class="btn" id="bidConfirm" disabled>입찰하기</button>
     </div>
@@ -2248,15 +2680,22 @@ function renderBiddingUI(){
     if(!cur){ /* 첫 배팅자는 패스해도 됨 */ }
     humanBid("pass");
   };
+  const missBtn = document.getElementById("dealMissBtn");
+  if(missBtn) missBtn.onclick = ()=>{ declareDealMiss(meId()); };
 }
 
 function renderExchangeUI(){
+  const canMiss = canDeclareDealMissAsDeclarer();
   openModal(`
     <h2>바닥패 획득</h2>
     <p class="sub">바닥의 3장을 받았습니다. 손패에서 아래에 버릴 3장을 선택하세요.</p>
-    <div class="modal-actions"><button class="btn" id="okKitty">확인</button></div>
+    ${canMiss? `<p class="sub" style="color:var(--gold-bright);">⚠️ 13장 손패에 점수 카드가 없습니다 — 딜미스를 선언할 수 있습니다.</p>
+    <div class="modal-actions"><button class="btn ghost" id="dealMissExBtn">🔄 딜미스 선언</button><button class="btn" id="okKitty">확인</button></div>`
+    : `<div class="modal-actions"><button class="btn" id="okKitty">확인</button></div>`}
   `);
   document.getElementById("okKitty").onclick = ()=>{ closeModal(); render(); };
+  const missBtn = document.getElementById("dealMissExBtn");
+  if(missBtn) missBtn.onclick = ()=>{ declareDealMissAsDeclarer(); };
 }
 
 function renderFriendUI(){
@@ -2337,8 +2776,12 @@ function renderResultUI(){
       ${scoreRows}
     </table>
     ${busted? `<p class="sub" style="color:#ef7d7d;text-align:center;margin-bottom:6px;">⚠ 점수가 소진된 플레이어가 발생해 매치가 종료됩니다.</p>`:""}
-    <div class="modal-actions"><button class="btn" id="restartBtn">경험치 확인 →</button></div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="viewLogBtn">로그 보기</button>
+      <button class="btn" id="restartBtn">경험치 확인 →</button>
+    </div>
   `);
+  document.getElementById("viewLogBtn").onclick = ()=> openLogModal(()=>renderResultUI());
   document.getElementById("restartBtn").onclick = ()=>{
     closeModal();
     renderXpModal(()=>{ if(hasNext){ newGame(); } else { renderMatchSummaryUI(); } });
@@ -2426,11 +2869,21 @@ function renderXpModal(onDone){
 }
 
 function renderMatchSummaryUI(){
+  // h.myWin은 그 판을 계산한 host 자신의 시점 값이라, 게스트가 그대로 쓰면
+  // 내가 아니라 host의 승패가 표시되는 문제가 있다. 라운드마다 저장해둔
+  // teamNames/declarer(이름 목록)로 "내 이름"이 그 판의 주공팀에 있었는지를
+  // 이 기기에서 다시 계산해서 보여준다.
+  const myName = G.players[meId()].name;
   const rows = matchState.history.map(h=>{
     const teamStr = h.solo? `${h.declarer}(솔로)` : (h.teamNames? h.teamNames.join(", ") : h.declarer);
-    return `<tr><td>${h.round}</td><td>${teamStr}</td><td>${suitBadge(h.giruda)}${h.count}</td><td>${h.teamPts}:${h.oppPts}</td><td>${h.myWin?'✅ 승리':'❌ 패배'}</td></tr>`;
+    const myWasDeclarerTeam = h.solo ? (h.declarer===myName) : (h.teamNames && h.teamNames.includes(myName));
+    const myWinRow = myWasDeclarerTeam ? h.success : !h.success;
+    return `<tr><td>${h.round}</td><td>${teamStr}</td><td>${suitBadge(h.giruda)}${h.count}</td><td>${h.teamPts}:${h.oppPts}</td><td>${myWinRow?'✅ 승리':'❌ 패배'}</td></tr>`;
   }).join("");
-  const myWins = matchState.history.filter(h=>h.myWin).length;
+  const myWins = matchState.history.filter(h=>{
+    const myWasDeclarerTeam = h.solo ? (h.declarer===myName) : (h.teamNames && h.teamNames.includes(myName));
+    return myWasDeclarerTeam ? h.success : !h.success;
+  }).length;
   const finalScoreRows = G.players.map(p=>`<tr><td>${p.name}</td><td>${matchState.scores[p.id]}점</td></tr>`).join("");
   const maxScore = Math.max(...matchState.scores);
   const winners = G.players.filter(p=>matchState.scores[p.id]===maxScore).map(p=>p.name).join(", ");
@@ -2446,8 +2899,12 @@ function renderMatchSummaryUI(){
       <tr><th>판</th><th>여당</th><th>계약</th><th>득점</th><th>내 팀 결과</th></tr>
       ${rows}
     </table>
-    <div class="modal-actions"><button class="btn" id="newMatchBtn">새 매치 시작</button></div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="viewLogBtnMatch">로그 보기</button>
+      <button class="btn" id="newMatchBtn">새 매치 시작</button>
+    </div>
   `);
+  document.getElementById("viewLogBtnMatch").onclick = ()=> openLogModal(()=>renderMatchSummaryUI());
   document.getElementById("newMatchBtn").onclick = ()=>{ closeModal(); matchState.history=[]; showRoundSetup(); };
 }
 
@@ -2459,6 +2916,7 @@ function showRoundSetup(){
   matchState.currentRound = 0;
   matchState.nextDealer = Math.floor(Math.random()*5);
   matchState.endMode = "rounds";
+  matchState.dealMissPool = 0;
   const presets = [1,3,5,7,9];
   const optHtml = presets.map(n=>`<div class="count-opt" data-n="${n}" style="width:44px;">${n}판</div>`).join("");
   onlineDisconnect(true);
@@ -2529,6 +2987,7 @@ function showRoundSetup(){
     const startScore = parseInt(document.getElementById("startScoreInput").value,10);
     matchState.startScore = isNaN(startScore)? 50 : startScore;
     matchState.scores = [0,1,2,3,4].map(()=>matchState.startScore);
+    matchState.dealMissPool = 0;
     matchState.endMode = chosenMode;
     matchState.totalRounds = Math.max(1, Math.min(99, chosenRounds||1));
     closeModal();
@@ -2537,17 +2996,70 @@ function showRoundSetup(){
 }
 
 /* ============================ 전체 로그 보기 ============================ */
-function openLogModal(){
+function openLogModal(onClose){
   if(!G) return;
   const items = G.log.map(s=>`<div>${s}</div>`).join("");
+  const rawText = G.log.join("\n");
   openModal(`
     <h2>전체 로그</h2>
     <div class="logFull" id="fullLogBox">${items || "<div>로그가 없습니다.</div>"}</div>
-    <div class="modal-actions"><button class="btn ghost" id="closeLogBtn">닫기</button></div>
+    <textarea id="logCopyBox" readonly style="position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;">${escapeHtml(rawText)}</textarea>
+    <p class="sub" id="logCopyMsg" style="text-align:center;min-height:16px;"></p>
+    <div class="modal-actions">
+      <button class="btn ghost" id="copyLogBtn">복사</button>
+      <button class="btn" id="closeLogBtn">닫기</button>
+    </div>
   `);
   const box = document.getElementById("fullLogBox");
   if(box) box.scrollTop = box.scrollHeight;
-  document.getElementById("closeLogBtn").onclick = closeModal;
+  document.getElementById("copyLogBtn").onclick = ()=> copyLogToClipboard();
+  document.getElementById("closeLogBtn").onclick = onClose || closeModal;
+}
+function escapeHtml(s){
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+async function copyLogToClipboard(){
+  const copyBox = document.getElementById("logCopyBox");
+  const msgEl = document.getElementById("logCopyMsg");
+  const text = G.log.join("\n");
+  const setOk = ()=>{
+    if(msgEl){ msgEl.textContent = "✅ 복사되었습니다."; msgEl.style.color = "var(--gold-bright)"; }
+    showToast("로그를 복사했습니다", "info");
+  };
+  const setFail = ()=>{
+    // 자동 복사가 막힌 환경(권한 없음 등)이면 텍스트박스를 화면에 드러내 직접 선택해 복사할 수 있게 해준다.
+    if(copyBox){
+      copyBox.style.position = "static";
+      copyBox.style.width = "100%";
+      copyBox.style.height = "80px";
+      copyBox.style.marginTop = "8px";
+      copyBox.style.padding = "8px";
+      copyBox.style.borderRadius = "8px";
+      copyBox.style.border = "1px solid var(--line)";
+      copyBox.style.background = "#0000002a";
+      copyBox.style.color = "var(--paper)";
+      copyBox.style.fontSize = "11px";
+      copyBox.focus();
+      copyBox.select();
+    }
+    if(msgEl){ msgEl.textContent = "자동 복사가 막혀있어요. 아래 상자를 길게 눌러 직접 복사해주세요."; msgEl.style.color = "#ef7d7d"; }
+  };
+  try{
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      await navigator.clipboard.writeText(text);
+      setOk();
+      return;
+    }
+  }catch(e){ /* 아래 폴백으로 진행 */ }
+  try{
+    if(copyBox){
+      copyBox.focus();
+      copyBox.select();
+      const ok = document.execCommand("copy");
+      if(ok){ setOk(); return; }
+    }
+  }catch(e){ /* 아래 폴백으로 진행 */ }
+  setFail();
 }
 
 /* ============================ 새 게임 버튼 ============================ */
@@ -2683,6 +3195,17 @@ function resumeGame(){
 
   // 강제 종료/백그라운드 전환 등 언제 끊겨도 최신 상태가 저장되도록 즉시 플러시
   document.addEventListener("visibilitychange", ()=>{ if(document.hidden) flushSaveNow(); });
+  // 다른 화면(앱/탭)에 나갔다가 돌아왔을 때, 온라인 연결이 끊겨있다면 예약된 대기시간을 기다리지 않고 바로 재접속을 시도한다.
+  document.addEventListener("visibilitychange", ()=>{
+    if(document.hidden) return;
+    if(online.connected || online.ws) return;
+    const room = online.room || (()=>{ try{ return localStorage.getItem("mighty_online_room")||""; }catch(e){ return ""; } })();
+    const token = online.token || (()=>{ try{ return localStorage.getItem("mighty_online_token")||""; }catch(e){ return ""; } })();
+    const nickname = online.nickname || (()=>{ try{ return localStorage.getItem("mighty_online_nickname")||""; }catch(e){ return ""; } })();
+    if(!room || !token || !nickname) return;
+    if(onlineReconnectTimer){ clearTimeout(onlineReconnectTimer); onlineReconnectTimer=null; }
+    connectOnline(nickname, room, token, true);
+  });
   window.addEventListener("pagehide", flushSaveNow);
   window.addEventListener("beforeunload", flushSaveNow);
   window.addEventListener("blur", flushSaveNow);

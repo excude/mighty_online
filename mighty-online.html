@@ -2454,12 +2454,11 @@ function renderMyRoleTag(){
   const el = document.getElementById("myRoleTag");
   if(!el) return;
   const my = meId();
-  // 내 프렌드 여부는 (프렌드 카드 지목 방식의 경우) 공개 전이라도 내 손패로 이미 알 수 있으므로
-  // 다른 사람에게는 숨겨진 상태라도 나 자신에게는 라벨로 표시해준다.
+  // 프렌드는 다른 사람들에게 공개되기 전까지는(G.friendRevealed) 나 자신에게도 라벨을 띄우지 않는다.
   if(G.declarer===my){
     el.textContent = G.solo? "솔로 주공" : "주공";
     el.className = "declarer";
-  } else if(!G.solo && G.friendPlayerId===my){
+  } else if(!G.solo && G.friendPlayerId===my && G.friendRevealed){
     el.textContent = "프렌드";
     el.className = "friend";
   } else {

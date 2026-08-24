@@ -215,6 +215,19 @@ wss.on("connection", (ws) => {
       }
       return;
     }
+
+    if (m.type === "chat") {
+      // 채팅: 보낸 사람을 제외한 같은 방의 모두에게 전달한다.
+      // 이름은 클라이언트가 보낸 값을 믿지 않고 서버가 들고 있는 실제 닉네임을 사용한다.
+      const sender = room.players.find((p) => p.id === joined.playerId);
+      if (!sender) return;
+      const text = String(m.text || "").slice(0, 300).trim();
+      if (!text) return;
+      for (const p of room.players) {
+        if (p.id !== joined.playerId) send(p.ws, { type: "chat", name: sender.name, text });
+      }
+      return;
+    }
   });
 
   ws.on("close", () => {

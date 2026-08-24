@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.223 -->
+<!-- MIGHTY (마이티) - v0.224 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -462,14 +462,23 @@
   .toast.hide{ animation:toastOut .2s ease-in forwards; }
   @keyframes toastOut{ from{opacity:1;} to{opacity:0;transform:translateY(-6px);} }
 
+  /* ---------- CHAT ---------- */
+  .chatLog{max-height:46vh;overflow-y:auto;background:#00000030;border-radius:10px;padding:10px 12px;margin-bottom:10px;display:flex;flex-direction:column;gap:7px;}
+  .chatMsg{max-width:80%;padding:7px 10px;border-radius:12px;font-size:13px;line-height:1.4;word-break:break-word;}
+  .chatMsg .who{font-size:10px;opacity:.65;margin-bottom:2px;font-weight:700;}
+  .chatMsg.me{align-self:flex-end;background:linear-gradient(160deg,#2c7a5b,#0c3527);color:var(--paper);}
+  .chatMsg.other{align-self:flex-start;background:#0000004a;color:var(--paper);}
+  .chatMsg.system{align-self:center;font-size:11px;opacity:.6;background:none;padding:2px 0;}
+
 </style>
 </head>
 <body>
 <div id="app">
   <div id="topbar">
-    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.223</span><span>MIGHTY CARD GAME</span></div>
+    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.224</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
+      <button id="chatBtn" class="btn ghost" style="padding:6px 10px;font-size:13px;position:relative;display:none;">💬<span id="chatBadge" style="display:none;position:absolute;top:-4px;right:-4px;background:var(--red);color:#fff;font-size:9px;font-weight:800;border-radius:8px;padding:1px 4px;line-height:1;min-width:13px;"></span></button>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
       <button id="profileBackupBtn" class="btn ghost" style="padding:6px 10px;font-size:13px;">💾</button>
       <button id="newGameBtn" class="btn ghost" style="padding:6px 10px;font-size:11px;">새 게임</button>
@@ -797,6 +806,84 @@ function onlineUrl(){
   return url;
 }
 function onlineSend(o){ if(onlineEnabled()) online.ws.send(JSON.stringify(o)); }
+
+/* ============================ 채팅 ============================ */
+let onlineChatLog = []; // {from, playerId, text, system}
+let onlineChatUnread = 0;
+let chatModalOpen = false;
+function resetOnlineChat(){
+  onlineChatLog = [];
+  onlineChatUnread = 0;
+  chatModalOpen = false;
+  updateChatBadge();
+}
+function updateChatBadge(){
+  const badge = document.getElementById("chatBadge");
+  if(!badge) return;
+  if(onlineChatUnread>0){ badge.textContent = onlineChatUnread>9? "9+" : String(onlineChatUnread); badge.style.display="block"; }
+  else badge.style.display="none";
+}
+function updateChatButtonVisibility(){
+  const btn = document.getElementById("chatBtn");
+  if(btn) btn.style.display = onlineEnabled() ? "" : "none";
+}
+function sendChatMessage(text){
+  text = (text||"").trim();
+  if(!text || !onlineEnabled()) return;
+  if(text.length>200) text = text.slice(0,200);
+  const name = (G && G.players[meId()]) ? G.players[meId()].name : (online.nickname||"나");
+  onlineSend({type:"chat", text, from:name, playerId:meId()});
+}
+function receiveChatMessage(m){
+  onlineChatLog.push({from:m.from||"플레이어", playerId:m.playerId, text:m.text||""});
+  if(onlineChatLog.length>200) onlineChatLog.shift();
+  if(chatModalOpen){
+    renderChatMessages();
+  } else {
+    onlineChatUnread++;
+    updateChatBadge();
+    if(m.playerId!==meId()) showToast(`💬 ${escHtml(m.from||"플레이어")}: ${escHtml((m.text||"").slice(0,40))}`, "info");
+  }
+}
+function openChatModal(){
+  chatModalOpen = true;
+  onlineChatUnread = 0; updateChatBadge();
+  openModal(`
+    <h2>채팅</h2>
+    <div class="chatLog" id="chatLogBox"></div>
+    <div class="row" style="gap:8px;">
+      <input type="text" id="chatInput" placeholder="메시지 입력" maxlength="200" style="flex:1;padding:9px 10px;border-radius:8px;border:1px solid var(--line);background:#0000002a;color:var(--paper);font-size:13px;">
+      <button class="btn" id="chatSendBtn" style="padding:9px 14px;">전송</button>
+    </div>
+    <div class="modal-actions"><button class="btn ghost" id="chatCloseBtn">닫기</button></div>
+  `);
+  renderChatMessages();
+  const input = document.getElementById("chatInput");
+  const doSend = ()=>{
+    if(!input) return;
+    const v = input.value;
+    if(v.trim()){ sendChatMessage(v); input.value=""; }
+    input.focus();
+  };
+  document.getElementById("chatSendBtn").onclick = doSend;
+  input.addEventListener("keydown", (e)=>{ if(e.key==="Enter"){ e.preventDefault(); doSend(); } });
+  document.getElementById("chatCloseBtn").onclick = ()=>{ chatModalOpen=false; closeModal(); };
+  setTimeout(()=>{ if(input) input.focus(); }, 50);
+}
+function renderChatMessages(){
+  const box = document.getElementById("chatLogBox");
+  if(!box) return;
+  if(!onlineChatLog.length){
+    box.innerHTML = `<div style="text-align:center;opacity:.5;font-size:12px;">아직 메시지가 없습니다.</div>`;
+  } else {
+    box.innerHTML = onlineChatLog.map(msg=>{
+      const mine = msg.playerId===meId();
+      return `<div class="chatMsg ${mine?'me':'other'}"><div class="who">${escHtml(msg.from)}</div>${escHtml(msg.text)}</div>`;
+    }).join("");
+  }
+  box.scrollTop = box.scrollHeight;
+}
+
 function onlineDisconnect(silent){
   if(onlineReconnectTimer){ clearTimeout(onlineReconnectTimer); onlineReconnectTimer=null; }
   onlineReconnectAttempt = 0;
@@ -806,6 +893,7 @@ function onlineDisconnect(silent){
   if(online.uiTimerHandle) clearInterval(online.uiTimerHandle); online.uiTimerHandle=null;
   const el = document.getElementById("onlineTimer");
   if(el) el.style.display="none";
+  updateChatButtonVisibility();
   if(!silent){ try{ localStorage.removeItem("mighty_online_room"); localStorage.removeItem("mighty_online_token"); }catch(e){} }
 }
 // host만 타이머를 발급/집행한다: 제한시간 안에 행동이 없으면 host가 대신 패스/AI행동을 실행해 게임이 멈추지 않게 한다.
@@ -915,6 +1003,7 @@ function guestPlaySfxForStateDiff(prevG, newG){
 }
 function connectOnline(nickname, roomCode, token, silentReconnect){
   onlineDisconnect(true);
+  if(!silentReconnect) resetOnlineChat(); // 새로 접속하는 경우에만 채팅창을 비우고, 끊겼다 재접속하는 경우엔 대화 내용을 유지한다
   online.nickname = nickname;
   try{ localStorage.setItem("mighty_online_nickname", nickname); }catch(e){}
   const url = onlineUrl();
@@ -945,6 +1034,7 @@ function connectOnline(nickname, roomCode, token, silentReconnect){
       online.connected=true; online.playerId=m.playerId; online.host=!!m.host; online.room=m.room; online.players=m.players||[];
       if(m.token) online.token=m.token;
       try{ localStorage.setItem("mighty_online_room", online.room); localStorage.setItem("mighty_online_token", online.token||""); }catch(e){}
+      updateChatButtonVisibility();
       if(silentReconnect && wasMidGame){
         // 게임 도중 재접속: 로비로 돌리지 않고 하던 게임을 그대로 이어서 보여준다.
         closeOnlineModals();
@@ -981,6 +1071,8 @@ function connectOnline(nickname, roomCode, token, silentReconnect){
       }
     } else if(m.type==="timer"){
       online.deadline = m.deadline||0; onlineRenderTimer();
+    } else if(m.type==="chat"){
+      receiveChatMessage(m);
     } else if(m.type==="peer_away"){
       const nm = m.name||"플레이어";
       logMsgSafe(`⏸️ ${escHtml(nm)}님의 연결이 잠시 끊겼습니다. 10초 안에 돌아오지 않으면 게임이 종료됩니다.`);
@@ -3188,6 +3280,8 @@ function resumeGame(){
   document.getElementById("newGameBtn").addEventListener("click", confirmNewGame);
   document.getElementById("sfxToggle").addEventListener("click", toggleSfx);
   document.getElementById("profileBackupBtn").addEventListener("click", showProfileBackupUI);
+  document.getElementById("chatBtn").addEventListener("click", openChatModal);
+  updateChatButtonVisibility();
   loadSfxPref();
   // iOS Safari 등에서는 사용자의 첫 터치가 있어야 오디오가 재생 가능해지므로, 화면 첫 터치에서 오디오 컨텍스트를 깨워둠
   document.body.addEventListener("touchstart", ()=>getSfxCtx(), {once:true, passive:true});

@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.214 -->
+<!-- MIGHTY (마이티) - v0.215 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -457,7 +457,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.214</span><span>MIGHTY CARD GAME</span></div>
+    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.215</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -855,7 +855,7 @@ function handleOnlineAction(action, pid){
   else if(action.type==="play" && G.phase==="play" && ((G.leader+G.trick.length)%5)===pid){
     const wasLead = G.trick.length===0;
     const card = action.card;
-    playCard(pid, card, true);
+    playCard(pid, card, true, !!action.suppressJokerCall);
     if(wasLead && card===JOKER && G.trickNum>1 && G.trickNum<10){
       if(G.players[pid].isHuman){
         // 실제 사람(원격 게스트)이 조커로 리드했다면, host가 AI로 무늬를 대신 정해버리지 않고
@@ -1694,23 +1694,26 @@ function validMoves(playerId){
   }
   return base;
 }
-function playCard(playerId, card, fromHost=false){
+function playCard(playerId, card, fromHost=false, suppressJokerCall=false){
   if(card===undefined || card===null){
     console.error("playCard: 유효하지 않은 카드 호출 무시", playerId, card);
     return;
   }
-  if(onlineEnabled() && !online.host && !fromHost){ onlineSend({type:"action", action:{type:"play", card}, playerId}); return; }
+  if(onlineEnabled() && !online.host && !fromHost){ onlineSend({type:"action", action:{type:"play", card, suppressJokerCall}, playerId}); return; }
   const p = G.players[playerId];
   const ledThisTrick = (G.trick.length===0); // 조커콜은 선(리드)으로 냈을 때만 효력이 있다
   p.hand = p.hand.filter(c=>c!==card);
-  G.trick.push({playerId,card});
+  const isCallLead = ledThisTrick && card===jokerCallCard() && !jokerAlreadyPlayed() && !suppressJokerCall;
+  const noCallFlag = ledThisTrick && card===jokerCallCard() && suppressJokerCall;
+  G.trick.push(noCallFlag ? {playerId,card,noCall:true} : {playerId,card});
   sfxPlay("card");
-  const isCallLead = ledThisTrick && card===jokerCallCard() && !jokerAlreadyPlayed();
   if(G.trick.length===1){
     G.ledSuit = (card===JOKER) ? null : (card===G.mighty? suitOf(card) : suitOf(card));
     if(isCallLead){
       logMsg(`🔫 조커콜! 조커를 가진 사람은 이번 트릭에 조커를 내야 합니다.`);
       sfxPlay("jokercall");
+    } else if(noCallFlag){
+      logMsg(`${p.name}: 조커콜 카드를 그냥 일반 카드로 냈습니다.`);
     }
   }
   if(!G.friendRevealed && card===G.friendCard){
@@ -1737,7 +1740,7 @@ function jokerAlreadyPlayed(){
   return false;
 }
 function isJokerCallLed(trick){
-  return trick.length>0 && trick[0].card===jokerCallCard() && !jokerAlreadyPlayed();
+  return trick.length>0 && trick[0].card===jokerCallCard() && !trick[0].noCall && !jokerAlreadyPlayed();
 }
 // 트릭 내 카드 한 장의 승패 점수를 계산 (evalTrickWinner류 3곳에서 공통으로 사용)
 function cardTrickScore(card, trick, ledSuit){
@@ -1984,7 +1987,7 @@ function cloneStateForSim(viewerId){
     }),
     giruda: G.giruda, mighty: G.mighty, declarer: G.declarer, bidCount: G.bidCount,
     friendCard: G.friendCard, friendPlayerId: G.friendPlayerId, friendRevealed: G.friendRevealed, solo: G.solo, friendMode: G.friendMode,
-    leader: G.leader, trick: G.trick.map(t=>({playerId:t.playerId, card:t.card})), ledSuit: G.ledSuit, trickNum: G.trickNum
+    leader: G.leader, trick: G.trick.map(t=>t.noCall?{playerId:t.playerId, card:t.card, noCall:true}:{playerId:t.playerId, card:t.card}), ledSuit: G.ledSuit, trickNum: G.trickNum
   };
 }
 function simPlayCard(playerId, card){
@@ -2409,11 +2412,19 @@ function onHandCardClick(card){
     const mv = validMoves(meId());
     if(!mv.includes(card)) return;
     const wasLead = G.trick.length===0;
-    playCard(meId(), card);
-    if(wasLead && card===JOKER && G.trickNum>1 && G.trickNum<10){
-      openJokerLeadSuitPicker(()=>scheduleTurn());
+    const isJokerCallLeadAttempt = wasLead && card===jokerCallCard() && !jokerAlreadyPlayed();
+    const proceed = (suppress)=>{
+      playCard(meId(), card, false, suppress);
+      if(wasLead && card===JOKER && G.trickNum>1 && G.trickNum<10){
+        openJokerLeadSuitPicker(()=>scheduleTurn());
+      } else {
+        scheduleTurn();
+      }
+    };
+    if(isJokerCallLeadAttempt){
+      openJokerCallConfirm(card, (useCall)=> proceed(!useCall));
     } else {
-      scheduleTurn();
+      proceed(false);
     }
   } else if(G.phase==="exchange" && G.declarer===meId()){
     if(!G.exchangeSelected) G.exchangeSelected = new Set();
@@ -2448,6 +2459,19 @@ function openJokerLeadSuitPicker(onDone){
       onDone();
     };
   });
+}
+
+function openJokerCallConfirm(card, onChoice){
+  openModal(`
+    <h2>🔫 조커콜 카드</h2>
+    <p class="sub">${cardLabel(card,false)}(을)를 선(리드)으로 냅니다. 조커콜을 발동하시겠습니까? 발동하면 조커를 가진 사람은 이번 트릭에 반드시 조커를 내야 합니다.</p>
+    <div class="modal-actions">
+      <button class="btn ghost" id="jokerCallNo">그냥 카드로 내기</button>
+      <button class="btn" id="jokerCallYes">조커콜 발동</button>
+    </div>
+  `, true);
+  document.getElementById("jokerCallYes").onclick = ()=>{ closeModal(); onChoice(true); };
+  document.getElementById("jokerCallNo").onclick = ()=>{ closeModal(); onChoice(false); };
 }
 
 function renderActionBar(){

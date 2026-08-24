@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.222 -->
+<!-- MIGHTY (마이티) - v0.223 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -175,6 +175,22 @@
     max-height:50vh;overflow-y:auto;
     font-size:12px;line-height:1.9;color:#e8e0c8;
     background:#00000030;border-radius:10px;padding:10px 12px;margin-bottom:12px;
+  }
+
+  /* ---------- CHAT ---------- */
+  #chatBubbleBtn{
+    display:none;position:absolute;bottom:8px;right:8px;
+    width:30px;height:30px;border-radius:50%;
+    background:#0e2a20e6;border:1px solid var(--gold);
+    align-items:center;justify-content:center;
+    font-size:15px;line-height:1;cursor:pointer;
+    box-shadow:0 2px 6px #00000055;z-index:5;
+  }
+  #chatBubbleBtn:active{background:#00000060;}
+  #chatBubbleBtn.unread::after{
+    content:"";position:absolute;top:-1px;right:-1px;
+    width:9px;height:9px;border-radius:50%;
+    background:#e0554f;border:1px solid #1a1410;
   }
 
   #myScoreCards{
@@ -425,7 +441,13 @@
     0%{ transform:translateY(0) rotate(0deg); opacity:1; }
     100%{ transform:translateY(140px) rotate(340deg); opacity:0; }
   }
-  .online-timer{margin:0 14px 7px;padding:5px 10px;border:1px solid #f0cd8a88;border-radius:12px;background:#00000045;color:var(--gold-bright);font-size:11px;text-align:center;font-weight:800;letter-spacing:.3px;z-index:21;}
+  .online-timer{
+    position:fixed;top:8px;left:50%;transform:translateX(-50%);
+    width:calc(100% - 24px);max-width:492px;
+    margin:0;padding:5px 10px;border:1px solid #f0cd8a88;border-radius:12px;
+    background:#0e2a20f0;color:var(--gold-bright);font-size:11px;text-align:center;font-weight:800;letter-spacing:.3px;
+    z-index:210;box-shadow:0 4px 14px #00000060;
+  }
   .online-timer.urgent{color:#ff7777;border-color:#ff777788;animation:timerPulse .5s infinite alternate;}
   @keyframes timerPulse{ from{opacity:1;} to{opacity:.55;} }
   .online-player-row{display:flex;align-items:center;gap:7px;padding:7px 9px;border:1px solid var(--line);border-radius:9px;background:#00000025;margin-bottom:6px;font-size:12px;}
@@ -461,7 +483,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.222</span><span>MIGHTY CARD GAME</span></div>
+    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.226</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -477,6 +499,7 @@
     <div id="trickArea"></div>
     <div id="trickWinnerFlash"></div>
     <div id="log"></div>
+    <div id="chatBubbleBtn" title="채팅">💬</div>
     <!-- seats injected by JS -->
   </div>
 
@@ -801,6 +824,7 @@ function onlineDisconnect(silent){
   const el = document.getElementById("onlineTimer");
   if(el) el.style.display="none";
   if(!silent){ try{ localStorage.removeItem("mighty_online_room"); localStorage.removeItem("mighty_online_token"); }catch(e){} }
+  updateChatButtonVisibility();
 }
 // host만 타이머를 발급/집행한다: 제한시간 안에 행동이 없으면 host가 대신 패스/AI행동을 실행해 게임이 멈추지 않게 한다.
 function onlineArmTimer(pid, phase){
@@ -949,11 +973,13 @@ function connectOnline(nickname, roomCode, token, silentReconnect){
       } else {
         renderOnlineLobby();
       }
+      updateChatButtonVisibility();
     } else if(m.type==="lobby"){
       online.players = m.players||[];
       const me = online.players.find(p=>p.id===online.playerId);
       online.host = !!(me && me.host);
       renderOnlineLobby();
+      updateChatButtonVisibility();
     } else if(m.type==="action" && online.host){
       handleOnlineAction(m.action, m.playerId);
     } else if(m.type==="state"){
@@ -975,6 +1001,10 @@ function connectOnline(nickname, roomCode, token, silentReconnect){
       }
     } else if(m.type==="timer"){
       online.deadline = m.deadline||0; onlineRenderTimer();
+    } else if(m.type==="chat"){
+      const nm = m.name||"플레이어";
+      addChatEntry(nm, m.text||"", false);
+      showToast(`💬 ${nm}: ${m.text||""}`, "info");
     } else if(m.type==="peer_away"){
       const nm = m.name||"플레이어";
       logMsgSafe(`⏸️ ${escHtml(nm)}님의 연결이 잠시 끊겼습니다. 10초 안에 돌아오지 않으면 게임이 종료됩니다.`);
@@ -1002,6 +1032,7 @@ function connectOnline(nickname, roomCode, token, silentReconnect){
     const was = online.connected;
     online.connected=false; online.ws=null;
     const el = document.getElementById("onlineTimer"); if(el) el.style.display="none";
+    updateChatButtonVisibility();
     if(was) scheduleOnlineReconnect();
   };
   ws.onerror = (e)=>{ console.error("온라인 서버 연결 오류", url, e); };
@@ -1029,6 +1060,57 @@ function scheduleOnlineReconnect(){
   }, Math.min(1500*onlineReconnectAttempt, 6000));
 }
 function logMsgSafe(s){ if(G && typeof logMsg==="function") logMsg(s); }
+
+/* ============================ 온라인 채팅 ============================ */
+// 채팅 기록은 판이 바뀌어도(새 게임 시 G.log가 초기화되어도) 남아있도록 G와 별도로 보관한다.
+const onlineChatHistory = [];
+function updateChatButtonVisibility(){
+  const btn = document.getElementById("chatBubbleBtn");
+  if(!btn) return;
+  const on = onlineEnabled();
+  btn.style.display = on ? "flex" : "none";
+  const logEl = document.getElementById("log");
+  if(logEl) logEl.style.paddingRight = on ? "36px" : "6px"; // 말풍선 버튼과 로그 텍스트가 겹치지 않도록
+}
+function addChatEntry(name, text, isMe){
+  onlineChatHistory.push({name, text, me:!!isMe});
+  if(onlineChatHistory.length>200) onlineChatHistory.shift();
+  if(G) logMsg(`💬 ${escHtml(name)}: ${escHtml(text)}`); // 로그창에도 채팅이 함께 보이도록
+  if(!isMe){
+    const btn = document.getElementById("chatBubbleBtn");
+    if(btn) btn.classList.add("unread");
+  }
+}
+function sendChatMessage(text){
+  if(!onlineEnabled()) return;
+  text = String(text||"").trim().slice(0,200);
+  if(!text) return;
+  const name = online.nickname || "플레이어";
+  onlineSend({type:"chat", text});
+  addChatEntry(name, text, true);
+}
+function openChatModal(){
+  const btn = document.getElementById("chatBubbleBtn");
+  if(btn) btn.classList.remove("unread");
+  openModal(`
+    <h2>채팅</h2>
+    <div class="row" style="gap:6px;flex-wrap:nowrap;">
+      <input id="chatInputBox" maxlength="200" placeholder="메시지를 입력하세요" style="flex:1;min-width:0;padding:10px;border-radius:8px;border:1px solid var(--line);background:#0000002a;color:var(--paper);font-size:14px;">
+    </div>
+    <div class="modal-actions"><button class="btn ghost" id="chatCloseBtn">취소</button><button class="btn" id="chatSendBtn">확인</button></div>
+  `, true);
+  const input = document.getElementById("chatInputBox");
+  const doSend = ()=>{
+    const text = (input.value||"").trim();
+    if(!text){ closeModal(); return; }
+    sendChatMessage(text);
+    closeModal(); // 전송 즉시 채팅창을 닫는다
+  };
+  document.getElementById("chatSendBtn").onclick = doSend;
+  input.addEventListener("keydown", (e)=>{ if(e.key==="Enter"){ e.preventDefault(); doSend(); } });
+  document.getElementById("chatCloseBtn").onclick = closeModal;
+  setTimeout(()=>{ if(input) input.focus(); }, 50);
+}
 // 화면 상단에 잠깐 뜨는 알림 배너 (접속 끊김 등). alert()과 달리 게임 흐름을 막지 않는다.
 function showToast(msg, kind="warn"){
   const stack = document.getElementById("toastStack");
@@ -1548,10 +1630,13 @@ function scheduleBidStep(){
     finishBidding(); return;
   }
   const player = G.players[cur];
-  if(player.isHuman && isLocalSeat(cur)){
-    renderBiddingUI();
-    if(online.host) onlineArmTimer(cur, "bidding");
-  } else if(!player.isHuman) {
+  if(player.isHuman){
+    if(online.host) onlineArmTimer(cur, "bidding"); // 입찰자가 바뀔 때마다(원격 플레이어 포함) 제한시간을 다시 발급
+    if(isLocalSeat(cur)){
+      renderBiddingUI();
+    }
+    // player.isHuman && !isLocalSeat(cur): 원격 플레이어의 턴이므로 그 사람의 action 메시지를 기다린다
+  } else {
     if(onlineEnabled() && !online.host) return; // guest는 AI 턴을 직접 계산하지 않고 host의 broadcast를 기다린다
     setTimeout(()=>{
       if(!G) return; // 방어: "새 게임"으로 초기화된 뒤 지연 타이머가 실행되는 경우
@@ -1562,7 +1647,6 @@ function scheduleBidStep(){
       scheduleBidStep();
     }, 550);
   }
-  // player.isHuman && !isLocalSeat(cur): 다른 사람(원격 플레이어)의 턴이므로 그 사람의 action 메시지를 기다린다
 }
 
 function humanBid(bid, pid=meId(), fromHost=false){
@@ -1595,11 +1679,14 @@ function startExchange(){
     declareDealMissAsDeclarer(true);
     return;
   }
-  if(d.isHuman && isLocalSeat(d.id)){
-    G.exchangeSelected = new Set();
-    if(online.host) onlineArmTimer(d.id, "exchange");
-    renderExchangeUI();
-  } else if(!d.isHuman) {
+  if(d.isHuman){
+    if(online.host) onlineArmTimer(d.id, "exchange"); // 주공이 바뀌거나 이 단계에 들어올 때(원격 플레이어 포함) 제한시간을 발급
+    if(isLocalSeat(d.id)){
+      G.exchangeSelected = new Set();
+      renderExchangeUI();
+    }
+    // d.isHuman && !isLocalSeat(d.id): 원격 플레이어(주공)의 턴이므로 그 사람의 action 메시지를 기다린다
+  } else {
     if(onlineEnabled() && !online.host){ render(); return; }
     // AI: discard 3 weakest non-mighty/non-joker/non-giruda-high cards
     const hand = d.hand.slice();
@@ -1661,14 +1748,16 @@ function aiChooseFriendCondition(hand){
 
 function startFriendSelection(){
   const d = G.players[G.declarer];
-  if(d.isHuman && isLocalSeat(d.id)){
-    if(online.host) onlineArmTimer(d.id, "friend");
-    renderFriendUI();
-  } else if(!d.isHuman) {
+  if(d.isHuman){
+    if(online.host) onlineArmTimer(d.id, "friend"); // 원격 플레이어(주공)의 턴이라도 제한시간을 발급
+    if(isLocalSeat(d.id)){
+      renderFriendUI();
+    } else {
+      render(); // 원격 플레이어의 프렌드 선택을 기다리는 동안에도 화면(phase 등)은 갱신
+    }
+  } else {
     if(onlineEnabled() && !online.host){ render(); return; }
     applyFriend(aiChooseFriendCondition(d.hand));
-  } else {
-    render(); // 원격 플레이어의 프렌드 선택을 기다리는 동안에도 화면(phase 등)은 갱신
   }
 }
 function applyFriend(choice, fromHost=false){
@@ -2291,6 +2380,7 @@ function render(){
   renderMyScoreCards();
   renderActionBar();
   onlineRenderTimer();
+  updateChatButtonVisibility();
   queueSave();
   if(online.host) broadcastOnlineState();
 }
@@ -3171,7 +3261,9 @@ function resumeGame(){
 
 /* ============================ 앱 초기화 ============================ */
 (async function init(){
-  document.getElementById("log").addEventListener("click", openLogModal);
+  document.getElementById("log").addEventListener("click", ()=> openLogModal());
+  document.getElementById("chatBubbleBtn").addEventListener("click", (e)=>{ e.stopPropagation(); openChatModal(); });
+  updateChatButtonVisibility();
   document.getElementById("newGameBtn").addEventListener("click", confirmNewGame);
   document.getElementById("sfxToggle").addEventListener("click", toggleSfx);
   document.getElementById("profileBackupBtn").addEventListener("click", showProfileBackupUI);

@@ -192,14 +192,6 @@
     width:9px;height:9px;border-radius:50%;
     background:#e0554f;border:1px solid #1a1410;
   }
-  .chatMsgList{
-    max-height:38vh;overflow-y:auto;
-    font-size:12.5px;line-height:1.7;color:#e8e0c8;
-    background:#00000030;border-radius:10px;padding:10px 12px;margin-bottom:12px;
-  }
-  .chatMsgRow{padding:3px 0;word-break:break-word;}
-  .chatMsgRow b{color:var(--gold-bright);margin-right:6px;}
-  .chatMsgRow.me b{color:#8fd0b0;}
 
   #myScoreCards{
     display:flex;flex-wrap:wrap;gap:3px;justify-content:center;
@@ -491,7 +483,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.224</span><span>MIGHTY CARD GAME</span></div>
+    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.226</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -1012,7 +1004,7 @@ function connectOnline(nickname, roomCode, token, silentReconnect){
     } else if(m.type==="chat"){
       const nm = m.name||"플레이어";
       addChatEntry(nm, m.text||"", false);
-      if(!chatModalOpen) showToast(`💬 ${nm}: ${m.text||""}`, "info");
+      showToast(`💬 ${nm}: ${m.text||""}`, "info");
     } else if(m.type==="peer_away"){
       const nm = m.name||"플레이어";
       logMsgSafe(`⏸️ ${escHtml(nm)}님의 연결이 잠시 끊겼습니다. 10초 안에 돌아오지 않으면 게임이 종료됩니다.`);
@@ -1072,7 +1064,6 @@ function logMsgSafe(s){ if(G && typeof logMsg==="function") logMsg(s); }
 /* ============================ 온라인 채팅 ============================ */
 // 채팅 기록은 판이 바뀌어도(새 게임 시 G.log가 초기화되어도) 남아있도록 G와 별도로 보관한다.
 const onlineChatHistory = [];
-let chatModalOpen = false;
 function updateChatButtonVisibility(){
   const btn = document.getElementById("chatBubbleBtn");
   if(!btn) return;
@@ -1081,20 +1072,11 @@ function updateChatButtonVisibility(){
   const logEl = document.getElementById("log");
   if(logEl) logEl.style.paddingRight = on ? "36px" : "6px"; // 말풍선 버튼과 로그 텍스트가 겹치지 않도록
 }
-function renderChatList(){
-  const list = document.getElementById("chatMsgList");
-  if(!list) return;
-  list.innerHTML = onlineChatHistory.length
-    ? onlineChatHistory.map(c=>`<div class="chatMsgRow ${c.me?"me":""}"><b>${escHtml(c.name)}</b>${escHtml(c.text)}</div>`).join("")
-    : `<div class="sub" style="margin:0;">아직 채팅이 없습니다.</div>`;
-  list.scrollTop = list.scrollHeight;
-}
 function addChatEntry(name, text, isMe){
   onlineChatHistory.push({name, text, me:!!isMe});
   if(onlineChatHistory.length>200) onlineChatHistory.shift();
   if(G) logMsg(`💬 ${escHtml(name)}: ${escHtml(text)}`); // 로그창에도 채팅이 함께 보이도록
-  if(chatModalOpen) renderChatList();
-  else if(!isMe){
+  if(!isMe){
     const btn = document.getElementById("chatBubbleBtn");
     if(btn) btn.classList.add("unread");
   }
@@ -1112,22 +1094,17 @@ function openChatModal(){
   if(btn) btn.classList.remove("unread");
   openModal(`
     <h2>채팅</h2>
-    <div class="chatMsgList" id="chatMsgList"></div>
     <div class="row" style="gap:6px;flex-wrap:nowrap;">
       <input id="chatInputBox" maxlength="200" placeholder="메시지를 입력하세요" style="flex:1;min-width:0;padding:10px;border-radius:8px;border:1px solid var(--line);background:#0000002a;color:var(--paper);font-size:14px;">
-      <button class="btn" id="chatSendBtn" style="padding:10px 14px;">전송</button>
     </div>
-    <div class="modal-actions"><button class="btn ghost" id="chatCloseBtn">닫기</button></div>
+    <div class="modal-actions"><button class="btn ghost" id="chatCloseBtn">취소</button><button class="btn" id="chatSendBtn">확인</button></div>
   `, true);
-  chatModalOpen = true;
-  renderChatList();
   const input = document.getElementById("chatInputBox");
   const doSend = ()=>{
     const text = (input.value||"").trim();
-    if(!text) return;
-    input.value = "";
+    if(!text){ closeModal(); return; }
     sendChatMessage(text);
-    input.focus();
+    closeModal(); // 전송 즉시 채팅창을 닫는다
   };
   document.getElementById("chatSendBtn").onclick = doSend;
   input.addEventListener("keydown", (e)=>{ if(e.key==="Enter"){ e.preventDefault(); doSend(); } });
@@ -1176,7 +1153,6 @@ function guestMaybePromptTurn(){
 }
 let guestLastResultSeq = -1;
 function closeOnlineModals(){
-  chatModalOpen = false;
   const overlay = document.getElementById("modalOverlay");
   if(overlay) overlay.classList.remove("show");
 }
@@ -2708,7 +2684,6 @@ function renderActionBar(){
 
 /* ============================ 모달들 ============================ */
 function openModal(html, keepHandVisible){
-  chatModalOpen = false; // 다른 모달이 열리면 채팅창은 닫힌 것으로 취급 (openChatModal에서 다시 true로 설정)
   const modalEl = document.getElementById("modalBody");
   modalEl.innerHTML = html;
   const overlay = document.getElementById("modalOverlay");
@@ -2731,7 +2706,6 @@ function openModal(html, keepHandVisible){
   }
 }
 function closeModal(){
-  chatModalOpen = false;
   document.getElementById("modalOverlay").classList.remove("show");
 }
 
@@ -3287,7 +3261,7 @@ function resumeGame(){
 
 /* ============================ 앱 초기화 ============================ */
 (async function init(){
-  document.getElementById("log").addEventListener("click", openLogModal);
+  document.getElementById("log").addEventListener("click", ()=> openLogModal());
   document.getElementById("chatBubbleBtn").addEventListener("click", (e)=>{ e.stopPropagation(); openChatModal(); });
   updateChatButtonVisibility();
   document.getElementById("newGameBtn").addEventListener("click", confirmNewGame);

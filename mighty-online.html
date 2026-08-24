@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.217 -->
+<!-- MIGHTY (마이티) - v0.218 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -195,6 +195,10 @@
     gap:8px;
   }
   #handInfo>*{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  #myRoleTag{font-size:10px;font-weight:900;border-radius:10px;padding:2px 8px;letter-spacing:.5px;flex-shrink:0;}
+  #myRoleTag:empty{padding:0;}
+  #myRoleTag.declarer{color:#3a2a0a;background:linear-gradient(90deg,#f0cd8a,#d4af6a);}
+  #myRoleTag.friend{color:#04203a;background:#4fa8e8;}
   #hand{
     display:flex;justify-content:center;
     gap:0;
@@ -457,7 +461,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.217</span><span>MIGHTY CARD GAME</span></div>
+    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.218</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -479,6 +483,7 @@
   <div id="handWrap">
     <div id="handInfo">
       <span id="handTitle">내 패</span>
+      <span id="myRoleTag"></span>
       <span id="handHint"></span>
     </div>
     <div id="myScoreCards"></div>
@@ -1449,18 +1454,18 @@ function aiEvaluateHand(hand){
 function aiDecideBid(playerId){
   const p = G.players[playerId];
   const ev = aiEvaluateHand(p.hand);
-  const suggested = 12 + Math.round(ev.strength/2.6); // rough mapping
+  const suggested = 12 + Math.round(ev.strength/2.8); // rough mapping — 손패 실제 강도 기준 감당 가능한 목표치
+  const cap = Math.min(20, suggested); // 이 손패로 노려볼 수 있는 상한선 (승산과 무관하게 무조건 13을 부르지 않도록, 강제 최소치를 두지 않음)
   const cur = G.highestBid;
   const curCount = cur? cur.count : 12;
-  let want = Math.max(13, Math.min(20, suggested));
   if(!cur){
-    if(want>=13) return {suit:ev.suit,count:Math.max(13,Math.min(want,20))};
+    if(cap>=13) return {suit:ev.suit,count:13}; // 손패가 받쳐줘도 처음엔 최소치로 조심스럽게 시작(바로 목표치까지 지르지 않음)
     return null;
   }
-  if(want > curCount && curCount<20){
-    return {suit:ev.suit, count:Math.min(20,curCount+1)};
+  if(cap > curCount && curCount<20){
+    return {suit:ev.suit, count:curCount+1}; // 내 손패가 감당 가능한 한도 내에서만 1점씩 올림
   }
-  return null; // pass
+  return null; // 내 손패로는 더 못 감당 → 패스
 }
 
 function placeBid(playerId, bid){
@@ -1646,10 +1651,12 @@ const SOLO_STRENGTH_THRESHOLD = 21;
 function aiChooseFriendCondition(hand){
   const candidates = [G.mighty, JOKER, ...SUITS.filter(s=>s!==G.giruda).map(s=>s+"14").filter(k=>k!==G.mighty)];
   const available = candidates.filter(c=>!hand.includes(c));
-  if(available.length===0) return "SOLO"; // 지목할 카드가 전부 내 손에 있어 어쩔 수 없는 경우
   const strength = assessSoloStrength(hand, G.giruda, G.mighty);
   if(strength >= SOLO_STRENGTH_THRESHOLD) return "SOLO"; // 확실히 이길 수 있을 때만 의도적으로 솔로 선택
-  return available[0];
+  if(available.length>0) return available[0];
+  // 지목할 카드가 전부 내 손에 있어도, 승산이 낮으면(=솔로 기준 미달) 곧바로 노프렌드로 가지 않고
+  // 초구 프렌드로 전환해 리스크를 분산한다 (첫 트릭을 가져가는 사람이 프렌드가 됨, 내가 직접 가져가면 그때만 노프렌드).
+  return "TRICK1";
 }
 
 function startFriendSelection(){
@@ -2443,10 +2450,29 @@ function buildCardEl(card, mini){
   return el;
 }
 
+function renderMyRoleTag(){
+  const el = document.getElementById("myRoleTag");
+  if(!el) return;
+  const my = meId();
+  // 내 프렌드 여부는 (프렌드 카드 지목 방식의 경우) 공개 전이라도 내 손패로 이미 알 수 있으므로
+  // 다른 사람에게는 숨겨진 상태라도 나 자신에게는 라벨로 표시해준다.
+  if(G.declarer===my){
+    el.textContent = G.solo? "솔로 주공" : "주공";
+    el.className = "declarer";
+  } else if(!G.solo && G.friendPlayerId===my){
+    el.textContent = "프렌드";
+    el.className = "friend";
+  } else {
+    el.textContent = "";
+    el.className = "";
+  }
+}
+
 function renderHand(){
   const hand = document.getElementById("hand");
   hand.innerHTML="";
   const me = G.players[meId()];
+  renderMyRoleTag();
   document.getElementById("handHint").textContent = `${me.hand.length}장`;
   let selectable = [];
   if(G.phase==="play" && G.trick.length<5){

@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.215 -->
+<!-- MIGHTY (마이티) - v0.217 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -457,7 +457,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.215</span><span>MIGHTY CARD GAME</span></div>
+    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.217</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -852,6 +852,7 @@ function broadcastOnlineState(){
 function handleOnlineAction(action, pid){
   if(!G || !action) return;
   if(action.type==="bid" && G.phase==="bidding" && G.bidTurn===pid) humanBid(action.bid, pid, true);
+  else if(action.type==="dealMiss" && G.phase==="bidding" && G.bidTurn===pid) declareDealMiss(pid, true);
   else if(action.type==="play" && G.phase==="play" && ((G.leader+G.trick.length)%5)===pid){
     const wasLead = G.trick.length===0;
     const card = action.card;
@@ -878,6 +879,7 @@ function handleOnlineAction(action, pid){
     scheduleTurn();
   }
   else if(action.type==="exchange" && G.phase==="exchange" && G.declarer===pid) doExchange(action.cards, true);
+  else if(action.type==="dealMissExchange" && G.phase==="exchange" && G.declarer===pid) declareDealMissAsDeclarer(true);
   else if(action.type==="friend" && G.phase==="friend" && G.declarer===pid) applyFriend(action.choice, true);
 }
 // 게스트는 카드 진행/트릭 판정을 직접 실행하지 않고 host가 보낸 state 브로드캐스트를
@@ -1184,6 +1186,7 @@ function startOnlineGame(){
   if(!online.host || online.starting) return;
   online.starting = true;
   matchState.history=[]; matchState.currentRound=0;
+  matchState.dealMissPool = 0;
   const startScore = Math.max(0, Math.min(999, isNaN(onlineLobbySettings.startScore)? 50 : onlineLobbySettings.startScore));
   matchState.startScore = startScore;
   matchState.scores = [0,1,2,3,4].map(()=>startScore);
@@ -1203,9 +1206,11 @@ const matchState = {
   startScore:50,
   endMode:"rounds", // "rounds" | "bust"
   scores:[50,50,50,50,50],
-  resultSeq:0 // 결과가 나올 때마다 host가 1씩 올리는 값. 온라인 게스트가 "새로운 결과인지"를 라운드 번호가
+  resultSeq:0, // 결과가 나올 때마다 host가 1씩 올리는 값. 온라인 게스트가 "새로운 결과인지"를 라운드 번호가
               // 매치마다 초기화되는 것과 무관하게 안정적으로 판별하기 위해 사용한다.
+  dealMissPool:0 // 딜미스로 깎인 점수가 쌓이는 곳. 그 판이 새로 진행되어 여당이 승리하면 여당에게 지급된다.
 };
+const DEAL_MISS_PENALTY = 1; // 딜미스 선언 시 선언자가 깎는 점수(=여당이 승리하면 돌려받는 점수 풀에 적립)
 
 /* ============================ 경험치 / 레벨 프로필 (매치와 무관하게 영구 저장) ============================ */
 const profile = { level:1, xp:0, totalGames:0, totalWins:0, currentStreak:0, bestStreak:0 };
@@ -1469,6 +1474,49 @@ function passBid(playerId){
   logMsg(`💬 ${G.players[playerId].name} 패스`);
 }
 
+/* ============================ 딜미스 ============================ */
+// 정식 룰: 손패(10장)에 점수 카드(10 이상)가 하나도 없으면 딜미스를 선언할 수 있다.
+function handHasNoScoreCards(hand){
+  return hand.filter(isScoreCard).length===0;
+}
+function canDeclareDealMiss(pid){
+  if(!G || G.phase!=="bidding") return false;
+  return handHasNoScoreCards(G.players[pid].hand);
+}
+// 새 딜러를 지정해 이번 판을 없던 것으로 하고 다시 딜한다.
+// penaltyPid가 지정되면 그 사람의 점수를 DEAL_MISS_PENALTY만큼 깎아 딜미스 적립금에 더한다.
+// (적립금은 다음 판에서 여당이 승리하면 여당에게 돌아간다 — finishGame 참고)
+function redeal(newDealerId, penaltyPid){
+  if(penaltyPid!==null && penaltyPid!==undefined){
+    matchState.scores[penaltyPid] = (matchState.scores[penaltyPid]||0) - DEAL_MISS_PENALTY;
+    matchState.dealMissPool = (matchState.dealMissPool||0) + DEAL_MISS_PENALTY;
+    logMsg(`📉 ${G.players[penaltyPid].name} 점수 ${DEAL_MISS_PENALTY} 차감 (딜미스 페널티 — 다음 판에 여당이 승리하면 여당에게 반환됩니다)`);
+  }
+  matchState.nextDealer = newDealerId;
+  matchState.currentRound = Math.max(0, matchState.currentRound-1); // 딜미스 판은 진행된 것으로 치지 않는다
+  closeModal();
+  render();
+  setTimeout(()=>{ if(G) newGame(); }, 1100);
+}
+function declareDealMiss(pid, fromHost=false){
+  if(onlineEnabled() && !online.host && !fromHost){ onlineSend({type:"action", action:{type:"dealMiss"}, playerId:pid}); return; }
+  if(G.phase!=="bidding" || G.bidTurn!==pid) return;
+  if(!canDeclareDealMiss(pid)) return;
+  logMsg(`⚠️ ${G.players[pid].name} 딜미스 선언! (손패에 점수 카드 없음) ${josaGa(G.players[pid].name)} 새 딜러가 되어 다시 딜합니다.`);
+  redeal(pid, pid);
+}
+// 선거 종료 후: 주공이 바닥패까지 받은 13장 손패에도 점수 카드가 하나도 없으면, 카드 교환 전에 딜미스를 선언할 수 있다.
+function canDeclareDealMissAsDeclarer(){
+  return !!G && G.phase==="exchange" && handHasNoScoreCards(G.players[G.declarer].hand);
+}
+function declareDealMissAsDeclarer(fromHost=false){
+  if(onlineEnabled() && !online.host && !fromHost){ onlineSend({type:"action", action:{type:"dealMissExchange"}, playerId:meId()}); return; }
+  if(!canDeclareDealMissAsDeclarer()) return;
+  logMsg(`⚠️ ${G.players[G.declarer].name} 딜미스 선언! (13장 손패에 점수 카드 없음) ${josaGa(G.players[G.declarer].name)} 새 딜러가 되어 다시 딜합니다.`);
+  redeal(G.declarer, G.declarer);
+}
+
+
 function scheduleBidStep(){
   if(!G) return; // 방어: "새 게임"으로 초기화된 뒤 지연 타이머가 실행되는 경우
   render();
@@ -1479,12 +1527,10 @@ function scheduleBidStep(){
     return;
   }
   if(!G.highestBid && active.length===0){
-    // 전원 패스 -> 강제 최저입찰 지정
-    const forced = Math.floor(Math.random()*5);
+    // 전원 패스 -> 딜미스로 간주: 기존 딜러가 유지된 채로 다시 딜한다 (페널티 없음)
     G.passedSet.clear();
-    G.highestBid = {playerId:forced, suit:SUITS[Math.floor(Math.random()*4)], count:13};
-    logMsg(`⚠️ 전원 패스! ${G.players[forced].name}에게 최저 배팅(13)이 강제 배정됩니다.`);
-    finishBidding();
+    logMsg(`⚠️ 전원 패스! 딜미스로 처리되어 딜러(${G.players[G.dealer].name})가 유지된 채 다시 딜합니다.`);
+    redeal(G.dealer, null);
     return;
   }
   const cur = G.bidTurn;
@@ -1504,6 +1550,7 @@ function scheduleBidStep(){
     if(onlineEnabled() && !online.host) return; // guest는 AI 턴을 직접 계산하지 않고 host의 broadcast를 기다린다
     setTimeout(()=>{
       if(!G) return; // 방어: "새 게임"으로 초기화된 뒤 지연 타이머가 실행되는 경우
+      if(canDeclareDealMiss(cur)){ declareDealMiss(cur, true); return; }
       const bid = aiDecideBid(cur);
       if(bid) placeBid(cur,bid); else passBid(cur);
       G.bidTurn = nextBidder(cur);
@@ -1538,6 +1585,11 @@ function startExchange(){
   const d = G.players[G.declarer];
   d.hand = d.hand.concat(G.kitty);
   d.hand = sortHand(d.hand, G.giruda, G.mighty);
+  if(!d.isHuman && canDeclareDealMissAsDeclarer()){
+    if(onlineEnabled() && !online.host){ render(); return; }
+    declareDealMissAsDeclarer(true);
+    return;
+  }
   if(d.isHuman && isLocalSeat(d.id)){
     G.exchangeSelected = new Set();
     if(online.host) onlineArmTimer(d.id, "exchange");
@@ -1658,9 +1710,10 @@ function validMoves(playerId){
   if(G.trick.length===0){
     base = hand.slice(); // leading: anything (subject to first-trick rule below)
   } else {
-    // 조커콜(리퍼)이 이번 트릭의 선으로 나왔다면, 조커를 가진 사람은 무조건 조커를 내야 한다
+    // 조커콜(리퍼)이 이번 트릭의 선으로 나왔다면, 조커를 가진 사람은 원칙적으로 조커를 내야 하지만,
+    // 마이티를 가지고 있다면 조커 대신 마이티로 방어할 수 있다(조커를 지켜낼 수 있는 유일한 예외).
     if(isJokerCallLed(G.trick) && hand.includes(JOKER)){
-      return [JOKER];
+      return hand.includes(G.mighty) ? [JOKER, G.mighty] : [JOKER];
     }
     const ledSuit = G.ledSuit;
     if(ledSuit===null){
@@ -1681,8 +1734,9 @@ function validMoves(playerId){
       }
     }
   }
-  // 규칙: 첫 트릭에는 기루다를 낼 수 없다 (다른 낼 카드가 없을 때만 예외)
-  if(G.giruda && G.trickNum===1){
+  // 규칙: 첫 트릭에는 주공이 기루다로 시작(리드)할 수 없다 (다른 낼 카드가 없을 때만 예외).
+  // 주공이 아닌 다른 플레이어는 첫 트릭에도 기루다를 리드하거나 낼 수 있다.
+  if(G.giruda && G.trickNum===1 && G.trick.length===0 && playerId===G.declarer){
     const noGiruda = base.filter(c=> c===JOKER || suitOf(c)!==G.giruda);
     if(noGiruda.length>0) base = noGiruda;
   }
@@ -2070,7 +2124,17 @@ function aiChooseCardOmniscient(playerId, moves){
   }
   // 8~9트릭까지 조커를 계속 쥐고 있으면 마지막(10) 트릭에 갇혀 무조건 지는 카드가 되어버린다.
   // 이건 상대 패를 몰라도 트릭 번호만으로 알 수 있는 규칙상 사실이므로, 이때는 지금 확실히 처리한다.
-  if(jokerRunningOutOfTime() && candidateMoves.includes(JOKER)) return JOKER;
+  if(jokerRunningOutOfTime() && moves.includes(JOKER)) return JOKER;
+  // 이미 우리 편(주공/프렌드 동료)이 이 트릭을 이기고 있다면, 마이티나 조커 같은 최강 카드를 또 내서
+  // 이중으로 이기며 낭비하지 않는다. (예: 프렌드가 조커로 이기고 있는데 주공이 마이티까지 내거나,
+  // 프렌드가 마이티로 이기고 있는데 주공이 조커까지 내는 상황을 방지)
+  if(G.trick.length>0){
+    const currentLeaderId = evalTrickWinnerSim(G.trick);
+    if(currentLeaderId!==playerId && teamOf(currentLeaderId)===teamOf(playerId)){
+      const safe = candidateMoves.filter(c=>c!==G.mighty && c!==JOKER);
+      if(safe.length>0) candidateMoves = safe;
+    }
+  }
   const ROLLOUTS = 24;
   let bestCard = candidateMoves[0], bestWinRate = -Infinity;
   for(const card of candidateMoves){
@@ -2174,9 +2238,16 @@ function finishGame(){
   for(const pid in deltas){
     matchState.scores[pid] = (matchState.scores[pid]||0) + deltas[pid];
   }
+  // 딜미스 적립금: 이번 판 여당(주공팀)이 승리하면 쌓여있던 적립금을 여당(주공)에게 돌려준다.
+  const dealMissPayout = (win && matchState.dealMissPool>0) ? matchState.dealMissPool : 0;
+  if(dealMissPayout>0){
+    matchState.scores[G.declarer] = (matchState.scores[G.declarer]||0) + dealMissPayout;
+    logMsg(`💰 딜미스 적립금 ${dealMissPayout}점이 여당(${G.players[G.declarer].name})에게 반환됩니다.`);
+  }
+  matchState.dealMissPool = 0;
 
   G.phase="result";
-  G.result = {teamPts, oppPts, success:win, declarerTeam:[...declarerTeam], base, unit, margin, isNoTrump, isRun, isBaekRun, deltas, target};
+  G.result = {teamPts, oppPts, success:win, declarerTeam:[...declarerTeam], base, unit, margin, isNoTrump, isRun, isBaekRun, deltas, target, dealMissPayout};
 
   matchState.nextDealer = (G.dealer+1)%5;
   matchState.resultSeq = (matchState.resultSeq||0) + 1;
@@ -2258,7 +2329,7 @@ function renderTopbar(){
   const badges = [];
   badges.push(`<span class="status-badge level">🎖 Lv.${profile.level} · ${Math.round(profile.xp)}/${xpToNextLevel(profile.level)}xp</span>`);
   if(G.phase==="play" && G.trickNum===1){
-    badges.push(`<span class="status-badge warn">⚠ 첫 트릭: 조커 최하위 · 기루다 낼 수 없음</span>`);
+    badges.push(`<span class="status-badge warn">⚠ 첫 트릭: 조커 최하위 · 주공은 기루다로 시작 불가</span>`);
   } else if(G.phase==="play" && G.trickNum===10){
     badges.push(`<span class="status-badge warn">⚠ 마지막 트릭: 조커 최하위</span>`);
   }
@@ -2531,15 +2602,18 @@ function renderBiddingUI(){
   let countHtml="";
   for(let c=minCount;c<=20;c++) countHtml+=`<div class="count-opt" data-count="${c}">${c}</div>`;
   const histHtml = G.bidHistory.slice(-8).map(h=>`<div>${h}</div>`).join("") || "<div>아직 입찰 없음</div>";
+  const canMiss = canDeclareDealMiss(meId());
   openModal(`
     <h2>배팅 — ${G.players[meId()].name} 차례</h2>
     <p class="sub">현재 최고 입찰: ${cur? (suitBadge(cur.suit)+' '+cur.count+' ('+G.players[cur.playerId].name+')') : '없음'}</p>
     <div class="bidlog">${histHtml}</div>
+    ${canMiss? `<p class="sub" style="color:var(--gold-bright);">⚠️ 손패에 점수 카드가 없습니다 — 딜미스를 선언할 수 있습니다.</p>` : ``}
     <p class="sub">기루다(트럼프) 선택 — 노기루다는 배당이 2배가 됩니다</p>
     <div class="row" id="suitRow">${suitHtml}</div>
     <p class="sub">목표 점수 (최소 ${minCount})</p>
     <div class="count-row" id="countRow">${countHtml}</div>
     <div class="modal-actions">
+      ${canMiss? `<button class="btn ghost" id="dealMissBtn">🔄 딜미스 선언</button>` : ``}
       <button class="btn ghost" id="passBtn">패스</button>
       <button class="btn" id="bidConfirm" disabled>입찰하기</button>
     </div>
@@ -2568,15 +2642,22 @@ function renderBiddingUI(){
     if(!cur){ /* 첫 배팅자는 패스해도 됨 */ }
     humanBid("pass");
   };
+  const missBtn = document.getElementById("dealMissBtn");
+  if(missBtn) missBtn.onclick = ()=>{ declareDealMiss(meId()); };
 }
 
 function renderExchangeUI(){
+  const canMiss = canDeclareDealMissAsDeclarer();
   openModal(`
     <h2>바닥패 획득</h2>
     <p class="sub">바닥의 3장을 받았습니다. 손패에서 아래에 버릴 3장을 선택하세요.</p>
-    <div class="modal-actions"><button class="btn" id="okKitty">확인</button></div>
+    ${canMiss? `<p class="sub" style="color:var(--gold-bright);">⚠️ 13장 손패에 점수 카드가 없습니다 — 딜미스를 선언할 수 있습니다.</p>
+    <div class="modal-actions"><button class="btn ghost" id="dealMissExBtn">🔄 딜미스 선언</button><button class="btn" id="okKitty">확인</button></div>`
+    : `<div class="modal-actions"><button class="btn" id="okKitty">확인</button></div>`}
   `);
   document.getElementById("okKitty").onclick = ()=>{ closeModal(); render(); };
+  const missBtn = document.getElementById("dealMissExBtn");
+  if(missBtn) missBtn.onclick = ()=>{ declareDealMissAsDeclarer(); };
 }
 
 function renderFriendUI(){
@@ -2789,6 +2870,7 @@ function showRoundSetup(){
   matchState.currentRound = 0;
   matchState.nextDealer = Math.floor(Math.random()*5);
   matchState.endMode = "rounds";
+  matchState.dealMissPool = 0;
   const presets = [1,3,5,7,9];
   const optHtml = presets.map(n=>`<div class="count-opt" data-n="${n}" style="width:44px;">${n}판</div>`).join("");
   onlineDisconnect(true);
@@ -2859,6 +2941,7 @@ function showRoundSetup(){
     const startScore = parseInt(document.getElementById("startScoreInput").value,10);
     matchState.startScore = isNaN(startScore)? 50 : startScore;
     matchState.scores = [0,1,2,3,4].map(()=>matchState.startScore);
+    matchState.dealMissPool = 0;
     matchState.endMode = chosenMode;
     matchState.totalRounds = Math.max(1, Math.min(99, chosenRounds||1));
     closeModal();

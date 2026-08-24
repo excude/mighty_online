@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.218 -->
+<!-- MIGHTY (마이티) - v0.222 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -438,7 +438,7 @@
   /* ---------- TOAST (접속 끊김 등 알림) ---------- */
   #toastStack{
     position:absolute;top:56px;left:50%;transform:translateX(-50%);
-    z-index:60;display:flex;flex-direction:column;gap:6px;align-items:center;
+    z-index:200;display:flex;flex-direction:column;gap:6px;align-items:center;
     pointer-events:none;width:calc(100% - 24px);max-width:480px;
   }
   .toast{
@@ -461,7 +461,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.218</span><span>MIGHTY CARD GAME</span></div>
+    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.222</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -2763,8 +2763,12 @@ function renderResultUI(){
       ${scoreRows}
     </table>
     ${busted? `<p class="sub" style="color:#ef7d7d;text-align:center;margin-bottom:6px;">⚠ 점수가 소진된 플레이어가 발생해 매치가 종료됩니다.</p>`:""}
-    <div class="modal-actions"><button class="btn" id="restartBtn">경험치 확인 →</button></div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="viewLogBtn">로그 보기</button>
+      <button class="btn" id="restartBtn">경험치 확인 →</button>
+    </div>
   `);
+  document.getElementById("viewLogBtn").onclick = ()=> openLogModal(()=>renderResultUI());
   document.getElementById("restartBtn").onclick = ()=>{
     closeModal();
     renderXpModal(()=>{ if(hasNext){ newGame(); } else { renderMatchSummaryUI(); } });
@@ -2882,8 +2886,12 @@ function renderMatchSummaryUI(){
       <tr><th>판</th><th>여당</th><th>계약</th><th>득점</th><th>내 팀 결과</th></tr>
       ${rows}
     </table>
-    <div class="modal-actions"><button class="btn" id="newMatchBtn">새 매치 시작</button></div>
+    <div class="modal-actions">
+      <button class="btn ghost" id="viewLogBtnMatch">로그 보기</button>
+      <button class="btn" id="newMatchBtn">새 매치 시작</button>
+    </div>
   `);
+  document.getElementById("viewLogBtnMatch").onclick = ()=> openLogModal(()=>renderMatchSummaryUI());
   document.getElementById("newMatchBtn").onclick = ()=>{ closeModal(); matchState.history=[]; showRoundSetup(); };
 }
 
@@ -2975,17 +2983,70 @@ function showRoundSetup(){
 }
 
 /* ============================ 전체 로그 보기 ============================ */
-function openLogModal(){
+function openLogModal(onClose){
   if(!G) return;
   const items = G.log.map(s=>`<div>${s}</div>`).join("");
+  const rawText = G.log.join("\n");
   openModal(`
     <h2>전체 로그</h2>
     <div class="logFull" id="fullLogBox">${items || "<div>로그가 없습니다.</div>"}</div>
-    <div class="modal-actions"><button class="btn ghost" id="closeLogBtn">닫기</button></div>
+    <textarea id="logCopyBox" readonly style="position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;">${escapeHtml(rawText)}</textarea>
+    <p class="sub" id="logCopyMsg" style="text-align:center;min-height:16px;"></p>
+    <div class="modal-actions">
+      <button class="btn ghost" id="copyLogBtn">복사</button>
+      <button class="btn" id="closeLogBtn">닫기</button>
+    </div>
   `);
   const box = document.getElementById("fullLogBox");
   if(box) box.scrollTop = box.scrollHeight;
-  document.getElementById("closeLogBtn").onclick = closeModal;
+  document.getElementById("copyLogBtn").onclick = ()=> copyLogToClipboard();
+  document.getElementById("closeLogBtn").onclick = onClose || closeModal;
+}
+function escapeHtml(s){
+  return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+async function copyLogToClipboard(){
+  const copyBox = document.getElementById("logCopyBox");
+  const msgEl = document.getElementById("logCopyMsg");
+  const text = G.log.join("\n");
+  const setOk = ()=>{
+    if(msgEl){ msgEl.textContent = "✅ 복사되었습니다."; msgEl.style.color = "var(--gold-bright)"; }
+    showToast("로그를 복사했습니다", "info");
+  };
+  const setFail = ()=>{
+    // 자동 복사가 막힌 환경(권한 없음 등)이면 텍스트박스를 화면에 드러내 직접 선택해 복사할 수 있게 해준다.
+    if(copyBox){
+      copyBox.style.position = "static";
+      copyBox.style.width = "100%";
+      copyBox.style.height = "80px";
+      copyBox.style.marginTop = "8px";
+      copyBox.style.padding = "8px";
+      copyBox.style.borderRadius = "8px";
+      copyBox.style.border = "1px solid var(--line)";
+      copyBox.style.background = "#0000002a";
+      copyBox.style.color = "var(--paper)";
+      copyBox.style.fontSize = "11px";
+      copyBox.focus();
+      copyBox.select();
+    }
+    if(msgEl){ msgEl.textContent = "자동 복사가 막혀있어요. 아래 상자를 길게 눌러 직접 복사해주세요."; msgEl.style.color = "#ef7d7d"; }
+  };
+  try{
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      await navigator.clipboard.writeText(text);
+      setOk();
+      return;
+    }
+  }catch(e){ /* 아래 폴백으로 진행 */ }
+  try{
+    if(copyBox){
+      copyBox.focus();
+      copyBox.select();
+      const ok = document.execCommand("copy");
+      if(ok){ setOk(); return; }
+    }
+  }catch(e){ /* 아래 폴백으로 진행 */ }
+  setFail();
 }
 
 /* ============================ 새 게임 버튼 ============================ */

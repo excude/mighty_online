@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.223 -->
+<!-- MIGHTY (마이티) - v0.227 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -483,7 +483,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.226</span><span>MIGHTY CARD GAME</span></div>
+    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.227</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -2035,12 +2035,27 @@ function jokerRunningOutOfTime(){
   return G.trickNum>=8 && G.trickNum<10;
 }
 
+// 마이티는 어떤 트릭에 내든 항상 이기지만, 계속 아끼기만 하면 정작 점수패가 몰려있는
+// 중요한 트릭들을 다 놓치고, 뒷트릭에 가서야 나와 이미 승부가 기운 뒤 별 것 아닌 트릭만
+// 가져가게 되는 경우가 많다(특히 마지막 트릭까지 끌려가 뒤늦게 나오는 패턴). 그래서
+// 우리 팀이 페이스보다 뒤처져 있으면 즉시, 그렇지 않아도 중반(6트릭)부터는 아끼지 말고
+// 적극적으로 써서 점수패를 선점한다.
+function mightyUrgent(playerId){
+  if(G.trickNum===1) return false; // 첫 트릭은 보통 패가 약해 아직 아껴도 늦지 않음
+  if(teamIsBehindPace(playerId)) return true;
+  if(G.trickNum>=6) return true;
+  return false;
+}
+
 function aiChooseCard(playerId, moves){
   // 아주 단순한 휴리스틱: 리드면 안전한 낮은 카드나 마이티/조커 아끼기, 팔로우면 이길 수 있으면 최소로 이기고 아니면 최저값 버림
   const jokerNow = moves.includes(JOKER) && jokerUrgent(playerId);
+  const mightyNow = moves.includes(G.mighty) && mightyUrgent(playerId);
   if(G.trick.length===0){
     // 조커가 급하면(9트릭 이상 방치 or 우리팀 열세) 확실한 승리 카드인 조커로 직접 리드
     if(jokerNow) return JOKER;
+    // 마이티도 마찬가지: 열세이거나 중반을 넘겼으면 아끼지 말고 지금 확실히 트릭을 가져온다
+    if(mightyNow) return G.mighty;
     // lead: prefer giruda low or highest non-mighty safe card
     const jc = jokerCallCard();
     const holder = jokerHolderId();

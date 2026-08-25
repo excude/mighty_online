@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.229 -->
+<!-- MIGHTY (마이티) - v0.231 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -492,7 +492,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.229</span><span>MIGHTY CARD GAME</span></div>
+    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.231</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -845,7 +845,13 @@ function onlineArmTimer(pid, phase){
     if(!online.host || !G || Date.now() < online.deadline) return;
     clearInterval(online.timerHandle); online.timerHandle=null; online.deadline=0;
     if(G.phase==="bidding" && G.bidTurn===pid) humanBid("pass", pid, true);
-    else if(G.phase==="play" && ((G.leader+G.trick.length)%5)===pid && G.trick.length<5){
+    else if(G.phase==="play" && waitingForJokerLeadSuit() && G.trick[0].playerId===pid){
+      const suit = aiChooseJokerCallSuit(pid);
+      G.ledSuit = suit;
+      logMsg(`🃏 ${G.players[pid].name}의 조커 선언: 이번 트릭은 ${SUIT_NAME[suit]} 기준으로 진행됩니다.`);
+      scheduleTurn();
+    }
+    else if(G.phase==="play" && playTurnIndex()===pid && G.trick.length<5){
       const mv = validMoves(pid);
       if(mv.length){
         const wasLead = G.trick.length===0;
@@ -873,7 +879,7 @@ function onlineRenderTimer(){
   if(!onlineEnabled() || !online.deadline || !G || G.phase==="result"){ el.style.display="none"; return; }
   let pid=-1;
   if(G.phase==="bidding") pid=G.bidTurn;
-  else if(G.phase==="play") pid=(G.leader+G.trick.length)%5;
+  else if(G.phase==="play") pid=playTurnIndex();
   else if(G.phase==="exchange"||G.phase==="friend") pid=G.declarer;
   if(pid<0){ el.style.display="none"; return; }
   const sec = Math.ceil(Math.max(0, online.deadline-Date.now())/1000);
@@ -902,6 +908,7 @@ function handleOnlineAction(action, pid){
         // 게스트 화면에는 방금 낸 조커가 반영돼 있고, 게스트 쪽 openJokerLeadSuitPicker에서
         // 고른 무늬는 "jokerLeadSuit" 액션으로 되돌아온다(아래 분기). 그때까지는 다음 턴으로
         // 넘어가지 않는다(scheduleTurn()을 호출하지 않음).
+        if(online.host) onlineArmTimer(pid, "play");
         return;
       }
       const suit = aiChooseJokerCallSuit(pid);
@@ -1146,6 +1153,10 @@ function guestMaybePromptTurn(){
     renderExchangeUI();
   } else if(G.phase==="friend" && G.declarer===my){
     renderFriendUI();
+  } else if(G.phase==="play" && waitingForJokerLeadSuit() && G.trick[0].playerId===my){
+    // 조커 리드 후 기준 무늬를 고르는 중이면, 아래 else의 closeOnlineModals()가
+    // 수트 선택창을 즉시 닫아버리지 않도록 여기서 창을 유지/재오픈한다.
+    if(!isJokerLeadSuitPickerOpen()) openJokerLeadSuitPicker(()=>scheduleTurn());
   } else if(G.phase==="result"){
     // 방장(host)이 finishGame()에서 결과를 계산해 브로드캐스트하면, 게스트는 여기서 자기 화면에도
     // 결과 모달을 띄워줘야 한다. 그렇지 않으면 방장 화면에만 결과가 나오고 게스트는 그냥 대기 화면에
@@ -1162,6 +1173,7 @@ function guestMaybePromptTurn(){
 }
 let guestLastResultSeq = -1;
 function closeOnlineModals(){
+  if(isJokerLeadSuitPickerOpen() && waitingForJokerLeadSuit() && G.trick[0].playerId===meId()) return;
   const overlay = document.getElementById("modalOverlay");
   if(overlay) overlay.classList.remove("show");
 }
@@ -2255,13 +2267,17 @@ function aiChooseCardOmniscient(playerId, moves){
   // 이건 상대 패를 몰라도 트릭 번호만으로 알 수 있는 규칙상 사실이므로, 이때는 지금 확실히 처리한다.
   if(jokerRunningOutOfTime() && moves.includes(JOKER)) return JOKER;
   // 이미 우리 편(주공/프렌드 동료)이 이 트릭을 이기고 있다면, 마이티나 조커 같은 최강 카드를 또 내서
-  // 이중으로 이기며 낭비하지 않는다. (예: 프렌드가 조커로 이기고 있는데 주공이 마이티까지 내거나,
-  // 프렌드가 마이티로 이기고 있는데 주공이 조커까지 내는 상황을 방지)
+  // 이중으로 이기며 낭비하지 않는다. 이 경우 롤아웃의 우연한 결과로 A·기루다 고점패를 낼 이유도
+  // 없으므로, 최강 카드가 아닌 합법 카드 중 가장 약한 것을 즉시 낸다.
+  // (예: 프렌드가 마이티로 이기고 있을 때 주공이 클로버 A를 보태는 상황을 방지)
   if(G.trick.length>0){
     const currentLeaderId = evalTrickWinnerSim(G.trick);
     if(currentLeaderId!==playerId && teamOf(currentLeaderId)===teamOf(playerId)){
       const safe = candidateMoves.filter(c=>c!==G.mighty && c!==JOKER);
-      if(safe.length>0) candidateMoves = safe;
+      if(safe.length>0){
+        safe.sort((a,b)=>aiCardWeight(a)-aiCardWeight(b));
+        return safe[0];
+      }
     }
   }
   // 공약 달성이 위태로운 상황(현재 페이스보다 확실히 뒤처져 있음)이면, 롤아웃 노이즈에만 맡기지 않고

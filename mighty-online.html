@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.227 -->
+<!-- MIGHTY (마이티) - v0.228 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -255,14 +255,23 @@
     position:absolute;top:3px;left:4px;
     font-size:11.5px;line-height:1.05;
     max-width:16px;
+    /* iOS Safari에서 부모(.card)가 mask-image로 별도 레이어에 있으면, 자식 텍스트가
+       그 레이어와 따로 매 프레임 재래스터라이즈되며 서브픽셀 단위로 떨려 보이는 경우가 있다.
+       텍스트도 자체 레이어로 고정하고 서브픽셀 안티앨리어싱을 끄면 사라진다. */
+    -webkit-transform:translateZ(0);
+    -webkit-font-smoothing:antialiased;
   }
   .card .s{
-    position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+    position:absolute;top:50%;left:50%;
+    transform:translate(-50%,-50%);
+    -webkit-transform:translate3d(-50%,-50%,0);
     font-size:17px;line-height:1;
+    -webkit-font-smoothing:antialiased;
   }
   .card .r.bottom{
     top:auto;left:auto;bottom:3px;right:4px;
     transform:rotate(180deg);
+    -webkit-transform:rotate(180deg) translateZ(0);
     max-width:16px;
   }
   .card.red{color:var(--red);}
@@ -483,7 +492,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.227</span><span>MIGHTY CARD GAME</span></div>
+    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.228</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -2075,8 +2084,10 @@ function aiChooseCard(playerId, moves){
     return pool[Math.random()<0.3?pool.length-1:0];
   }
   // 현재 트릭에서 누가 이기고 있는지 확인 — 같은 편이 이기고 있다면 굳이 뒤집으려 하지 않고 낮은 카드로 따라간다
+  // 단, 조커콜로 조커/마이티 중에서만 골라야 하는 강제 상황은 예외로 둔다: 이때 조커는 무력화되어
+  // 사실상 지는 카드이므로 "아낀다"는 논리로 조커를 냈다간 마이티로 방어할 기회를 매번 놓치게 된다.
   const currentLeaderId = evalTrickWinnerSim(G.trick);
-  if(currentLeaderId!==playerId && teamOf(currentLeaderId)===teamOf(playerId)){
+  if(currentLeaderId!==playerId && teamOf(currentLeaderId)===teamOf(playerId) && !isJokerCallLed(G.trick)){
     // 이미 우리 편이 이기고 있는 트릭이면, 최강 카드인 마이티/조커는 다른 낼 카드가 있는 한 아껴서 낭비하지 않는다.
     const safe = moves.filter(c=>c!==G.mighty && c!==JOKER);
     const pool = safe.length? safe : moves;

@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.231 -->
+<!-- MIGHTY (마이티) - v0.232 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -492,7 +492,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.231</span><span>MIGHTY CARD GAME</span></div>
+    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.232</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -799,7 +799,9 @@ function sortHand(hand, giruda, mighty){
 // ⚠️ Render에 서버를 배포한 뒤, 아래 주소를 실제 서비스 주소로 바꿔주세요. (예: wss://mighty-online.onrender.com)
 const ONLINE_SERVER_URL = "wss://mighty-online-6svd.onrender.com";
 const ONLINE_LIMIT_MS = 20000;
-const online = {ws:null, connected:false, host:false, room:"", playerId:null, nickname:"", token:"", players:[], deadline:0, timerHandle:null, uiTimerHandle:null, starting:false};
+const ONLINE_RESULT_LIMIT_MS = 20000; // 결과/레벨 확인 화면 전용 대기시간(턴 제한시간과 별도로 부여)
+const online = {ws:null, connected:false, host:false, room:"", playerId:null, nickname:"", token:"", players:[], deadline:0, timerHandle:null, uiTimerHandle:null, starting:false,
+  resultDeadline:0, resultReady:new Set(), resultTimerHandle:null}; // 결과/레벨 확인 화면 전용 20초 대기 상태 (턴 제한시간과 별개)
 let onlineReconnectAttempt = 0;
 let onlineReconnectTimer = null;
 // 온라인 방장이 로비에서 고르는 매치 설정(시작 점수/종료 방식/판 수). 로비가 재렌더링(인원 변경 등)되어도
@@ -827,6 +829,8 @@ function onlineDisconnect(silent){
   if(onlineReconnectTimer){ clearTimeout(onlineReconnectTimer); onlineReconnectTimer=null; }
   onlineReconnectAttempt = 0;
   if(online.timerHandle) clearInterval(online.timerHandle); online.timerHandle=null;
+  if(online.resultTimerHandle) clearTimeout(online.resultTimerHandle); online.resultTimerHandle=null;
+  online.resultDeadline=0; online.resultReady=new Set();
   if(online.ws){ try{ online.ws.onclose=null; online.ws.close(); }catch(e){} }
   online.ws=null; online.connected=false; online.host=false; online.playerId=null; online.players=[]; online.room=""; online.token="";
   if(online.uiTimerHandle) clearInterval(online.uiTimerHandle); online.uiTimerHandle=null;
@@ -876,7 +880,18 @@ function onlineArmTimer(pid, phase){
 function onlineRenderTimer(){
   const el = document.getElementById("onlineTimer");
   if(!el) return;
-  if(!onlineEnabled() || !online.deadline || !G || G.phase==="result"){ el.style.display="none"; return; }
+  if(!onlineEnabled() || !G){ el.style.display="none"; return; }
+  if(G.phase==="result"){
+    if(!online.resultDeadline){ el.style.display="none"; return; }
+    const sec = Math.ceil(Math.max(0, online.resultDeadline-Date.now())/1000);
+    const totalHuman = G.players.filter(p=>p.isHuman).length;
+    const readyPart = online.host ? ` · 확인 ${online.resultReady.size}/${totalHuman}명` : "";
+    el.textContent = `⏱ 다음 라운드까지 ${sec}초${readyPart} (전원 확인 시 즉시 진행)`;
+    el.classList.toggle("urgent", sec<=5);
+    el.style.display="block";
+    return;
+  }
+  if(!online.deadline){ el.style.display="none"; return; }
   let pid=-1;
   if(G.phase==="bidding") pid=G.bidTurn;
   else if(G.phase==="play") pid=playTurnIndex();
@@ -887,9 +902,51 @@ function onlineRenderTimer(){
   el.classList.toggle("urgent", sec<=5);
   el.style.display="block";
 }
+// host만 결과/레벨 확인 화면의 20초 대기를 발급한다. 이 시간 안에 전원(사람 플레이어)이 확인하면
+// 즉시, 아니면 20초가 다 되면 강제로 다음 라운드를 진행한다. 턴 제한시간(online.deadline)과는
+// 완전히 별개의 타이머다.
+function onlineArmResultTimer(){
+  if(!online.host) return;
+  online.resultReady = new Set();
+  online.resultDeadline = Date.now() + ONLINE_RESULT_LIMIT_MS;
+  onlineSend({type:"resultTimer", deadline:online.resultDeadline});
+  if(online.resultTimerHandle) clearTimeout(online.resultTimerHandle);
+  online.resultTimerHandle = setTimeout(()=>{
+    online.resultTimerHandle = null;
+    if(!online.host || !G || G.phase!=="result") return;
+    advanceRoundAfterResult(); // 시간 초과: 아직 확인하지 않은 사람이 있어도 강제로 다음 라운드 진행
+  }, ONLINE_RESULT_LIMIT_MS + 50);
+  onlineRenderTimer();
+}
+function onlineAllResultReady(){
+  if(!G) return true;
+  return G.players.filter(p=>p.isHuman).every(p=>online.resultReady.has(p.id));
+}
+// 결과/레벨 확인을 마쳤음을 표시한다. 게스트는 host에게 액션으로 전달하고, host는 직접 반영한다.
+// 전원이 확인되면(또는 이미 시간이 다 됐으면) 즉시 다음 라운드로 진행한다.
+function confirmResultReady(pid, fromHost){
+  if(onlineEnabled() && !online.host && !fromHost){
+    onlineSend({type:"action", action:{type:"resultReady"}, playerId:pid});
+    return;
+  }
+  if(!online.host || !G || G.phase!=="result") return;
+  online.resultReady.add(pid);
+  onlineRenderTimer();
+  if(onlineAllResultReady()) advanceRoundAfterResult();
+}
+// host 전용: 다음 라운드로 실제로 진행시킨다 (전원 확인 완료 또는 20초 초과 시 호출됨).
+function advanceRoundAfterResult(){
+  if(online.resultTimerHandle){ clearTimeout(online.resultTimerHandle); online.resultTimerHandle=null; }
+  online.resultDeadline = 0;
+  online.resultReady = new Set();
+  onlineRenderTimer();
+  if(!G || G.phase!=="result") return;
+  closeModal();
+  if(hasNextRound()) newGame();
+}
 function broadcastOnlineState(){
   if(online.host && onlineEnabled() && G){
-    onlineSend({type:"state", state:{G:serializeG(G), matchState, deadline:online.deadline}});
+    onlineSend({type:"state", state:{G:serializeG(G), matchState, deadline:online.deadline, resultDeadline:online.resultDeadline}});
   }
 }
 // host가 guest로부터 받은 행동(action)을 검증 후 실제 게임 로직에 반영
@@ -926,6 +983,7 @@ function handleOnlineAction(action, pid){
   else if(action.type==="exchange" && G.phase==="exchange" && G.declarer===pid) doExchange(action.cards, true);
   else if(action.type==="dealMissExchange" && G.phase==="exchange" && G.declarer===pid) declareDealMissAsDeclarer(true);
   else if(action.type==="friend" && G.phase==="friend" && G.declarer===pid) applyFriend(action.choice, true);
+  else if(action.type==="resultReady" && G.phase==="result") confirmResultReady(pid, true);
 }
 // 게스트는 카드 진행/트릭 판정을 직접 실행하지 않고 host가 보낸 state 브로드캐스트를
 // 받아 화면만 갱신하기 때문에, 기존에는 sfxPlay()를 거치는 코드 경로 자체를 타지 않아
@@ -1007,6 +1065,7 @@ function connectOnline(nickname, roomCode, token, silentReconnect){
         G = deserializeG(m.state.G);
         Object.assign(matchState, m.state.matchState||{});
         online.deadline = m.state.deadline||0;
+        online.resultDeadline = (G.phase==="result") ? (m.state.resultDeadline||0) : 0;
         if(G.result) applyMyPerspective(G.result); // host가 보낸 myTeam/myWin(host 자신의 시점)을 내 시점 값으로 덮어쓴다
         guestPlaySfxForStateDiff(prevG, G);
         render();
@@ -1017,6 +1076,8 @@ function connectOnline(nickname, roomCode, token, silentReconnect){
       }
     } else if(m.type==="timer"){
       online.deadline = m.deadline||0; onlineRenderTimer();
+    } else if(m.type==="resultTimer"){
+      online.resultDeadline = m.deadline||0; onlineRenderTimer();
     } else if(m.type==="chat"){
       const nm = m.name||"플레이어";
       addChatEntry(nm, m.text||"", false);
@@ -2417,6 +2478,8 @@ function finishGame(){
   });
   render();
   renderResultUI();
+  if(online.host && hasNextRound()) onlineArmResultTimer(); // 온라인이고 다음 라운드가 있으면 20초 확인 대기를 시작한다
+
 }
 
 function hasNextRound(){
@@ -2733,7 +2796,7 @@ function renderActionBar(){
     btn.className="btn";
     const hasNext = hasNextRound();
     btn.textContent = hasNext? `다음 판 시작` : "매치 결과 보기";
-    btn.onclick = ()=>{ closeModal(); if(hasNext){ newGame(); } else { renderMatchSummaryUI(); } };
+    btn.onclick = ()=>{ closeModal(); proceedAfterResult(); };
     bar.appendChild(btn);
   }
 }
@@ -2917,8 +2980,31 @@ function renderResultUI(){
   document.getElementById("viewLogBtn").onclick = ()=> openLogModal(()=>renderResultUI());
   document.getElementById("restartBtn").onclick = ()=>{
     closeModal();
-    renderXpModal(()=>{ if(hasNext){ newGame(); } else { renderMatchSummaryUI(); } });
+    renderXpModal(proceedAfterResult);
   };
+}
+
+// 결과 화면 + 레벨(경험치) 확인 화면을 모두 본 뒤 호출된다.
+// 오프라인/로컬 게임에서는 곧바로 다음 라운드로 넘어가지만, 온라인 모드에서는 "확인 완료"를 host에게
+// 알리고 다른 플레이어들도 모두 확인하거나(또는 20초가 지나면) host가 자동으로 다음 라운드를 시작할
+// 때까지 대기 화면을 보여준다.
+function proceedAfterResult(){
+  const hasNext = hasNextRound();
+  if(!hasNext){ renderMatchSummaryUI(); return; }
+  if(onlineEnabled()){
+    confirmResultReady(meId());
+    // host 자신의 확인으로 이미 전원이 확인되어 다음 라운드가 시작됐다면(phase가 바뀌었다면)
+    // 대기 화면을 따로 띄우지 않는다.
+    if(G && G.phase==="result") renderResultWaitingUI();
+  } else {
+    newGame();
+  }
+}
+function renderResultWaitingUI(){
+  openModal(`
+    <h2 style="text-align:center;">✅ 확인 완료</h2>
+    <p class="sub" style="text-align:center;">다른 플레이어들이 결과를 확인하는 중입니다.<br>모두 확인하거나 제한시간이 끝나면 자동으로 다음 판이 시작됩니다.</p>
+  `);
 }
 
 function renderXpModal(onDone){

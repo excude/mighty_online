@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.230 -->
+<!-- MIGHTY (마이티) - v0.231 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -492,7 +492,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.230</span><span>MIGHTY CARD GAME</span></div>
+    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.231</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -2267,13 +2267,17 @@ function aiChooseCardOmniscient(playerId, moves){
   // 이건 상대 패를 몰라도 트릭 번호만으로 알 수 있는 규칙상 사실이므로, 이때는 지금 확실히 처리한다.
   if(jokerRunningOutOfTime() && moves.includes(JOKER)) return JOKER;
   // 이미 우리 편(주공/프렌드 동료)이 이 트릭을 이기고 있다면, 마이티나 조커 같은 최강 카드를 또 내서
-  // 이중으로 이기며 낭비하지 않는다. (예: 프렌드가 조커로 이기고 있는데 주공이 마이티까지 내거나,
-  // 프렌드가 마이티로 이기고 있는데 주공이 조커까지 내는 상황을 방지)
+  // 이중으로 이기며 낭비하지 않는다. 이 경우 롤아웃의 우연한 결과로 A·기루다 고점패를 낼 이유도
+  // 없으므로, 최강 카드가 아닌 합법 카드 중 가장 약한 것을 즉시 낸다.
+  // (예: 프렌드가 마이티로 이기고 있을 때 주공이 클로버 A를 보태는 상황을 방지)
   if(G.trick.length>0){
     const currentLeaderId = evalTrickWinnerSim(G.trick);
     if(currentLeaderId!==playerId && teamOf(currentLeaderId)===teamOf(playerId)){
       const safe = candidateMoves.filter(c=>c!==G.mighty && c!==JOKER);
-      if(safe.length>0) candidateMoves = safe;
+      if(safe.length>0){
+        safe.sort((a,b)=>aiCardWeight(a)-aiCardWeight(b));
+        return safe[0];
+      }
     }
   }
   // 공약 달성이 위태로운 상황(현재 페이스보다 확실히 뒤처져 있음)이면, 롤아웃 노이즈에만 맡기지 않고

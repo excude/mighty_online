@@ -1,4 +1,4 @@
-<!-- MIGHTY (마이티) - v0.228 -->
+<!-- MIGHTY (마이티) - v0.229 -->
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -492,7 +492,7 @@
 <body>
 <div id="app">
   <div id="topbar">
-    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.228</span><span>MIGHTY CARD GAME</span></div>
+    <div id="logoBrand" class="brand title-font" style="cursor:pointer;user-select:none;">마이티<span class="ver-tag">v0.229</span><span>MIGHTY CARD GAME</span></div>
     <div style="display:flex;align-items:center;gap:8px;">
       <div id="phaseTag">준비 중</div>
       <button id="sfxToggle" class="btn ghost" style="padding:6px 10px;font-size:13px;">🔊</button>
@@ -2229,6 +2229,13 @@ function aiChooseCardOmniscient(playerId, moves){
     const noJoker = moves.filter(c=>c!==JOKER);
     if(noJoker.length>0) candidateMoves = noJoker;
   }
+  // 주공(프렌드 포함)이 첫 트릭을 마이티로 직접 리드하지 않는다. 첫 트릭은 아직 패가 약하고
+  // 정보도 없어 마이티를 쓸 만큼 급하지 않은 경우가 많고, 마이티는 나중에 점수패가 몰린 트릭을
+  // 확실히 가져오거나 위기에서 방어하는 용도로 아껴두는 편이 유리하다.
+  if(G.trickNum===1 && G.trick.length===0 && candidateMoves.includes(G.mighty)){
+    const noMighty = candidateMoves.filter(c=>c!==G.mighty);
+    if(noMighty.length>0) candidateMoves = noMighty;
+  }
   // 조커콜(리퍼)을 리드로 낼 때, 우리 팀 조커를 스스로 무력화시키는 자충수는 피한다.
   // 상대 실제 손패는 몰라도 되고, 오직 "공개된 정보"만으로 판단한다:
   //  - 내 손에 조커가 있다 (자기 자신의 패이므로 당연히 아는 정보)
@@ -2256,6 +2263,13 @@ function aiChooseCardOmniscient(playerId, moves){
       const safe = candidateMoves.filter(c=>c!==G.mighty && c!==JOKER);
       if(safe.length>0) candidateMoves = safe;
     }
+  }
+  // 공약 달성이 위태로운 상황(현재 페이스보다 확실히 뒤처져 있음)이면, 롤아웃 노이즈에만 맡기지 않고
+  // 마이티를 지금 확실히 써서 점수패를 챙긴다. 리드라면 마이티로 직접 선점하고, 팔로우라면 이 트릭을
+  // 마이티로 확실히 가져온다. (그렇지 않으면 "아직 안 급한 것 같다"는 롤아웃 오차 때문에 프렌드가
+  // 마이티를 계속 쥐고만 있다가 이미 승부가 기운 뒤에야 뒤늦게 내는 경우가 많다.)
+  if(G.trickNum>1 && teamIsBehindPace(playerId) && candidateMoves.includes(G.mighty)){
+    return G.mighty;
   }
   const ROLLOUTS = 24;
   let bestCard = candidateMoves[0], bestWinRate = -Infinity;
